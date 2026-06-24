@@ -4,12 +4,6 @@
 
 Browser-based WebHID configurator for the MonsGeek FUN60 Ultra TMR.
 
-<p>
-  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=111111">
-  <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646CFF?style=for-the-badge&logo=vite&logoColor=ffffff">
-  <img alt="WebHID" src="https://img.shields.io/badge/WebHID-Chromium-fbbc04?style=for-the-badge&logo=googlechrome&logoColor=111111">
-  <img alt="License" src="https://img.shields.io/badge/Unofficial-Use%20at%20your%20own%20risk-2b2e31?style=for-the-badge">
-</p>
 
 An unofficial, open alternative to proprietary keyboard software, built as a
 single-page Vite + React app that talks directly to the keyboard from the
