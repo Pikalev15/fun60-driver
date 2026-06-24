@@ -1076,7 +1076,7 @@ export default function App() {
 
             {/* quick settings: 3-card grid */}
             {section==="quick" && (
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:12 }}>
                 {[
                   <APCard   ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys}/>,
                   <RTCard   rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}

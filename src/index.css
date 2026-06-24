@@ -52,15 +52,16 @@
 
 body {
   margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow: hidden;
 }
 
 #root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  text-align: initial;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
