@@ -1,102 +1,108 @@
+<div align="center">
+
 # FUN60 Driver
 
-Browser-based configurator for the MonsGeek FUN60 Ultra TMR keyboard.
+Browser-based WebHID configurator for the MonsGeek FUN60 Ultra TMR.
 
-FUN60 Driver is a Vite + React app that talks to the keyboard through the
-WebHID API. It is intended as an unofficial, open alternative to proprietary
-desktop configuration software.
+<p>
+  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=111111">
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646CFF?style=for-the-badge&logo=vite&logoColor=ffffff">
+  <img alt="WebHID" src="https://img.shields.io/badge/WebHID-Chromium-fbbc04?style=for-the-badge&logo=googlechrome&logoColor=111111">
+  <img alt="License" src="https://img.shields.io/badge/Unofficial-Use%20at%20your%20own%20risk-2b2e31?style=for-the-badge">
+</p>
 
-## Current Features
+An unofficial, open alternative to proprietary keyboard software, built as a
+single-page Vite + React app that talks directly to the keyboard from the
+browser.
 
-- Connects to the FUN60 Ultra TMR over WebHID.
-- Verifies the keyboard by vendor ID, product ID, usage page, usage, and device
-  ID before applying settings.
-- Reads the active profile, polling rate, LED settings, firmware version, and
-  magnetic switch settings after connection.
-- Provides a 60 percent ANSI keyboard visualizer with selectable keys.
+</div>
+
+---
+
+## Overview
+
+FUN60 Driver connects to the FUN60 Ultra TMR through the browser's WebHID API.
+It reads the keyboard's current settings, exposes a visual 60 percent layout,
+and sends feature-report commands for magnetic switch, polling, profile, and RGB
+configuration.
+
+| Area | Status |
+| --- | --- |
+| WebHID connection | Implemented |
+| Device identity check | Implemented |
+| Profile read/write | Implemented |
+| Actuation point writes | Implemented |
+| Rapid Trigger mode and sensitivity | Implemented |
+| Polling rate selection | Implemented |
+| LED power, mode, color, brightness, speed | Implemented |
+| Remap panel | UI only |
+| Dynamic Keystroke panel | UI only |
+| Live analog depth from hardware | Not wired yet |
+
+## Features
+
+- Connects to the keyboard over WebHID, with VID/PID/usage filtering.
+- Verifies the connected device against expected FUN60 identifiers.
+- Reads profile, polling, LED, firmware, and magnetic switch settings after
+  connection.
+- Shows a selectable 60 percent ANSI keyboard visualizer.
 - Applies actuation point changes globally or to selected keys.
 - Enables or disables Rapid Trigger globally or per selected key.
 - Applies Rapid Trigger press sensitivity to selected keys or all mapped keys.
-- Supports polling rate selection from 125 Hz through 8000 Hz.
-- Controls LED power, mode, color, brightness, and speed.
-- Includes profile selection for four profile slots.
-- Includes a demo mode for visualizing analog key depth without hardware.
+- Supports polling rates from `125 Hz` through `8000 Hz`.
+- Controls LED power, animation mode, color, brightness, and speed.
+- Provides four profile slots and a local demo mode for visual key-depth motion.
 
-The Remap and Dynamic Keystroke panels currently provide UI scaffolding only.
-They do not send remap or DKS configuration commands to the keyboard yet.
+## Hardware Target
 
-## Supported Hardware
+| Field | Value |
+| --- | --- |
+| Keyboard | MonsGeek FUN60 Ultra TMR |
+| Protocol family | RongYuan RY5088-style HID |
+| USB vendor ID | `0x3151` |
+| USB product ID | `0x5030` |
+| HID usage page | `0xFFFF` |
+| HID usage | `0x02` |
+| Device ID | `2307` |
 
-The app is currently targeted at:
+Some right-side keys share firmware magnetic slot `63`, matching the behavior
+documented in the source comments.
 
-- MonsGeek FUN60 Ultra TMR
-- USB vendor ID: `0x3151`
-- USB product ID: `0x5030`
-- HID usage page: `0xFFFF`
-- HID usage: `0x02`
-- Device ID: `2307`
+## Requirements
 
-The code assumes a RongYuan RY5088-style protocol and magnetic key mapping. Some
-right-side keys share firmware magnetic slot `63`, matching the keyboard
-firmware behavior noted in the source comments.
+Use a Chromium-based browser with WebHID support.
 
-## Browser Requirements
+| Browser | Support |
+| --- | --- |
+| Chrome | Supported |
+| Edge | Supported |
+| Brave | Supported |
+| Firefox | Not supported |
+| Safari | Not supported |
 
-Use a Chromium-based browser with WebHID support:
+WebHID requires a secure context, so use `localhost` for development or an HTTPS
+origin for deployment.
 
-- Chrome
-- Edge
-- Brave
-
-Firefox and Safari do not currently support WebHID.
-
-Because WebHID requires a secure context, run the app from `localhost` during
-development or from an HTTPS origin when deployed.
-
-## Getting Started
-
-Install dependencies:
+## Quick Start
 
 ```bash
 npm install
-```
-
-Start the development server:
-
-```bash
 npm run dev
 ```
 
-Open the Vite URL in a Chromium-based browser, connect the keyboard by USB, and
-press **Connect Keyboard**.
+Then open the Vite URL in Chrome, Edge, or Brave, connect the keyboard by USB,
+and press **Connect Keyboard**.
 
-## Available Scripts
+## Scripts
 
-```bash
-npm run dev
-```
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the Vite development server. |
+| `npm run build` | Build the production bundle into `dist/`. |
+| `npm run preview` | Serve the production build locally. |
+| `npm run lint` | Run ESLint across the project. |
 
-Starts the Vite development server.
-
-```bash
-npm run build
-```
-
-Builds the production bundle into `dist/`.
-
-```bash
-npm run preview
-```
-
-Serves the production build locally for preview.
-
-```bash
-npm run lint
-```
-
-Runs ESLint across the project.
-
-## Project Structure
+## Project Layout
 
 ```text
 .
@@ -114,54 +120,41 @@ Runs ESLint across the project.
 `-- eslint.config.js
 ```
 
-Most of the app currently lives in `src/App.jsx`, including:
+Most of the implementation currently lives in `src/App.jsx`:
 
-- RY5088 command packet helpers
-- WebHID connection and settings reads
-- FUN60 keyboard layout metadata
-- visual keyboard selection
-- quick settings cards
-- RGB, remap, and advanced panels
-- main application shell
+| Section | Responsibility |
+| --- | --- |
+| Protocol helpers | Build and parse RY5088-style HID reports. |
+| `useKeyboard` | Manage WebHID connection, reads, writes, and disconnects. |
+| Layout metadata | Define the FUN60 visual layout and magnetic indices. |
+| Keyboard visualizer | Select keys and show demo key-depth feedback. |
+| Settings panels | Actuation, Rapid Trigger, polling, RGB, remap, and DKS UI. |
+| App shell | Sidebar navigation, profiles, connection banner, and topbar. |
 
 ## Protocol Notes
 
-The app sends and receives 64-byte HID feature reports.
+The app sends and receives `64` byte HID feature reports. Magnetic switch
+distances are displayed in millimeters and encoded for the wire protocol as
+centi-millimeters.
 
-Implemented command areas include:
+Implemented command areas:
 
 - device info
 - active profile
 - polling rate
-- LED power and LED parameters
+- LED power and parameters
 - magnetic actuation, lift, Rapid Trigger press, Rapid Trigger lift, and mode
   values
 
-Magnetic switch distances are displayed in millimeters and encoded for the wire
-protocol as centi-millimeters.
+## Roadmap Notes
 
-## Development Status
+The UI already includes entry points for more advanced configuration, but these
+areas still need protocol work before they can change keyboard state:
 
-Working in the current code:
-
-- WebHID device selection and connection
-- feature-report communication
-- device identity check
-- settings read after connection
-- profile switching
-- actuation point writes
-- Rapid Trigger mode writes
-- Rapid Trigger sensitivity writes
-- polling rate writes
-- LED setting writes
-- interactive keyboard selection
-
-Present but not fully wired to hardware:
-
-- remapping
+- key remapping
 - Dynamic Keystroke configuration
-- live analog depth from the keyboard
-- save semantics beyond sending the selected profile command
+- live analog depth from the hardware telemetry interface
+- clearer save semantics beyond sending the selected profile command
 
 ## Disclaimer
 
