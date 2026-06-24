@@ -135,15 +135,47 @@ const ALL_KEYS = ROWS.flat();
 /* ─────────────────────────────────────────────────────────────────────────────
    DESIGN TOKENS  (extracted from Wootility 5.3.1 source)
 ───────────────────────────────────────────────────────────────────────────── */
-const C = {
-  bg:      "#181a1b", surf:   "#222426", over:   "#2b2e31",
-  bord:    "#34383c", bordHv: "#4a5058",
-  key:     "#FFD45C", keyHv:  "#ffe07a", keyTxt: "#1a1200",
-  keySel:  "#5B51FF", keySlH: "#7168ff",
-  txt:     "#e8ebed", sub:    "#ccd1d6", muted:  "#7C848D",
-  accent:  "#FFD45C", atxt:   "#1a1200",
-  green:   "#4ade80", red:    "#EE3F3F", blue:   "#38bdf8",
+const THEMES = {
+  dark: {
+    bg: "#181a1b", surf: "#222426", over: "#2b2e31",
+    nav: "#111213", panel: "#1a1c1d", track: "#3a3f44",
+    bord: "#34383c", bordHv: "#4a5058", kbBody: "#111213", kbBord: "#2a2d30",
+    key: "#FFD45C", keyHv: "#ffe07a", keyTxt: "#1a1200",
+    keySel: "#5B51FF", keySlH: "#7168ff",
+    txt: "#e8ebed", sub: "#ccd1d6", muted: "#7C848D",
+    accent: "#FFD45C", atxt: "#1a1200", activeBg: "rgba(255,212,92,.08)",
+    disabledBg: "#3a3a2a", disabledTxt: "#6a6a4a",
+    shadow: "0 8px 32px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.04)",
+    keyRestShadow: "0 2px 0 rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.15)",
+    keyDepthShadow: d => `inset 0 ${Math.round(d*5)}px 4px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.2)`,
+    keyDepthBg: d => `hsl(${48-d*30},${90-d*20}%,${78-d*28}%)`,
+    keyDepthBar: "rgba(0,0,0,.3)", sharedDot: "rgba(0,0,0,.25)",
+    selectedMark: "rgba(255,255,255,.5)", selectedDot: "rgba(255,255,255,.4)",
+    selectedTxt: "#fff", selectedSub: "rgba(255,255,255,.7)", depthTxt: "rgba(0,0,0,.45)",
+    watermark: "rgba(255,255,255,.06)",
+    green: "#4ade80", red: "#EE3F3F", blue: "#38bdf8",
+  },
+  light: {
+    bg: "#f5f4ef", surf: "#ffffff", over: "#f0eee7",
+    nav: "#f9f7f0", panel: "#ffffff", track: "#ded9ca",
+    bord: "#ded8c9", bordHv: "#c7bea9", kbBody: "#ece6d7", kbBord: "#d8cfbc",
+    key: "#fff6d8", keyHv: "#ffefaf", keyTxt: "#35270b",
+    keySel: "#4f46e5", keySlH: "#635bff",
+    txt: "#201f1b", sub: "#504b42", muted: "#81776a",
+    accent: "#d59b00", atxt: "#1d1600", activeBg: "rgba(213,155,0,.12)",
+    disabledBg: "#ece6d0", disabledTxt: "#9c8f72",
+    shadow: "0 14px 35px rgba(82,68,33,.14), inset 0 1px 0 rgba(255,255,255,.8)",
+    keyRestShadow: "0 2px 0 rgba(111,88,28,.22),inset 0 1px 0 rgba(255,255,255,.85)",
+    keyDepthShadow: d => `inset 0 ${Math.round(d*5)}px 4px rgba(111,88,28,.22),0 0 0 1px rgba(111,88,28,.14)`,
+    keyDepthBg: d => `hsl(${48-d*22},${88-d*12}%,${88-d*20}%)`,
+    keyDepthBar: "rgba(87,68,18,.26)", sharedDot: "rgba(87,68,18,.22)",
+    selectedMark: "rgba(255,255,255,.55)", selectedDot: "rgba(255,255,255,.45)",
+    selectedTxt: "#ffffff", selectedSub: "rgba(255,255,255,.78)", depthTxt: "rgba(68,50,10,.55)",
+    watermark: "rgba(71,57,21,.12)",
+    green: "#16a34a", red: "#dc2626", blue: "#0284c7",
+  },
 };
+let C = THEMES.dark;
 const FONT = "'Nunito Sans','Inter',system-ui,sans-serif";
 const MONO = "'JetBrains Mono',monospace";
 
@@ -243,7 +275,7 @@ function Toggle({ on, onChange }) {
   return (
     <div onClick={() => onChange(!on)} style={{
       width:40, height:22, borderRadius:11, cursor:"pointer", flexShrink:0,
-      background: on ? C.accent : "#3a3f44", position:"relative",
+      background: on ? C.accent : C.track, position:"relative",
       transition:"background .18s",
       boxShadow: on ? `0 0 8px ${C.accent}55` : "none",
     }}>
@@ -269,7 +301,7 @@ function Slider({ label, value, min, max, step, onChange, unit="mm", color=C.acc
           </span>
         </div>
       )}
-      <div style={{ position:"relative", height:4, borderRadius:2, background:"#3a3f44" }}>
+      <div style={{ position:"relative", height:4, borderRadius:2, background:C.track }}>
         <div style={{ position:"absolute", left:0, width:`${pct}%`, height:"100%", borderRadius:2, background:color }}/>
         <div style={{
           position:"absolute", top:"50%", left:`${pct}%`,
@@ -299,7 +331,7 @@ function NavItem({ icon, label, active, badge, onClick }) {
   return (
     <button onClick={onClick} style={{
       display:"flex", alignItems:"center", gap:10, width:"100%", padding:"8px 14px",
-      background: active ? "rgba(255,212,92,.08)" : "transparent",
+      background: active ? C.activeBg : "transparent",
       border:"none", borderLeft:`2px solid ${active ? C.accent : "transparent"}`,
       cursor:"pointer", fontFamily:FONT, fontSize:13,
       color: active ? C.txt : C.muted, fontWeight: active ? 600 : 400,
@@ -380,10 +412,10 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
     <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
       {/* body */}
       <div style={{
-        background:"#111213", borderRadius:"10px 10px 14px 14px",
+        background:C.kbBody, borderRadius:"10px 10px 14px 14px",
         padding:"12px 13px 16px", display:"inline-flex", flexDirection:"column", gap:G,
-        border:`1px solid #2a2d30`,
-        boxShadow:"0 8px 32px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.04)",
+        border:`1px solid ${C.kbBord}`,
+        boxShadow:C.shadow,
         position:"relative",
       }}>
         {/* status LEDs */}
@@ -400,7 +432,7 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
               const sel = selectedKeys.has(key.id);
               const hov_ = hov === key.id;
               const bg  = sel ? (hov_ ? C.keySlH : C.keySel)
-                        : d > 0.02 ? `hsl(${48-d*30},${90-d*20}%,${78-d*28}%)`
+                        : d > 0.02 ? C.keyDepthBg(d)
                         : hov_ ? C.keyHv : C.key;
               return (
                 <button key={key.id}
@@ -412,9 +444,7 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
                     width:kw(key.u), height:38, borderRadius:4, flexShrink:0,
                     background:bg, border:"none", padding:0, cursor:"pointer",
                     outline: sel ? `2px solid rgba(91,81,255,.8)` : "none", outlineOffset:-1,
-                    boxShadow: d>0.02
-                      ? `inset 0 ${Math.round(d*5)}px 4px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.2)`
-                      : "0 2px 0 rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.15)",
+                    boxShadow: d>0.02 ? C.keyDepthShadow(d) : C.keyRestShadow,
                     display:"flex", flexDirection:"column",
                     alignItems:"center", justifyContent:"center",
                     position:"relative", overflow:"hidden",
@@ -426,22 +456,22 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
                   {d > 0.02 && <div style={{
                     position:"absolute", bottom:0, left:0,
                     width:`${d*100}%`, height:2,
-                    background: sel ? "rgba(255,255,255,.5)" : "rgba(0,0,0,.3)",
+                    background: sel ? C.selectedMark : C.keyDepthBar,
                     borderTopRightRadius:1,
                   }}/>}
                   {/* shared-slot indicator */}
                   {key.shared && <div style={{
                     position:"absolute", top:2, right:2,
                     width:3, height:3, borderRadius:"50%",
-                    background: sel ? "rgba(255,255,255,.4)" : "rgba(0,0,0,.25)",
+                    background: sel ? C.selectedDot : C.sharedDot,
                   }}/>}
                   <span style={{
                     fontSize:key.u>=1.5?9:10, fontFamily:FONT, fontWeight:700,
-                    color: sel?"#fff":C.keyTxt, userSelect:"none", lineHeight:1,
+                    color: sel?C.selectedTxt:C.keyTxt, userSelect:"none", lineHeight:1,
                   }}>{key.l}</span>
                   {d > 0.08 && <span style={{
                     fontSize:6.5, fontFamily:MONO, lineHeight:1, marginTop:1,
-                    color: sel?"rgba(255,255,255,.7)":"rgba(0,0,0,.45)",
+                    color: sel?C.selectedSub:C.depthTxt,
                   }}>{(d*4).toFixed(1)}</span>}
                 </button>
               );
@@ -450,7 +480,7 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
         ))}
         <div style={{ position:"absolute", bottom:4, left:"50%", transform:"translateX(-50%)",
           fontSize:7, fontWeight:800, letterSpacing:".2em",
-          color:"rgba(255,255,255,.06)", textTransform:"uppercase" }}>wooting</div>
+          color:C.watermark, textTransform:"uppercase" }}>wooting</div>
       </div>
 
       {/* sub-bar */}
@@ -627,7 +657,7 @@ function PerfCard({ pollingCode, setPollingCode, connected, dSend }) {
           return (
             <button key={r} onClick={() => handleRate(code)} style={{
               padding:"4px 8px", borderRadius:4, border:`1px solid ${(POLL_HZ[pollingCode]??1000)===r?C.accent:C.bord}`,
-              background:(POLL_HZ[pollingCode]??1000)===r?"rgba(255,212,92,.08)":"transparent",
+              background:(POLL_HZ[pollingCode]??1000)===r?C.activeBg:"transparent",
               color:(POLL_HZ[pollingCode]??1000)===r?C.accent:C.muted,
               fontSize:10, fontFamily:MONO, cursor:"pointer",
               fontWeight:(POLL_HZ[pollingCode]??1000)===r?700:400,
@@ -674,7 +704,7 @@ function RGBPanel({ ledOn, setLedOn, ledMode, setLedMode, ledR, setLedR, ledG, s
           {MODES.map(([code, name]) => (
             <button key={code} onClick={() => { setLedMode(+code); apply(+code,ledSpeed,ledBri,ledR,ledG,ledB); }} style={{
               padding:"6px 11px", border:`1px solid ${ledMode===+code?C.accent:C.bord}`,
-              borderRadius:4, background:ledMode===+code?"rgba(255,212,92,.07)":"transparent",
+              borderRadius:4, background:ledMode===+code?C.activeBg:"transparent",
               color:ledMode===+code?C.accent:C.muted, fontSize:12, textAlign:"left",
               fontFamily:FONT, cursor:"pointer",
             }}>{name}</button>
@@ -689,7 +719,7 @@ function RGBPanel({ ledOn, setLedOn, ledMode, setLedMode, ledR, setLedR, ledG, s
               {["#FFD45C","#5B51FF","#ef4444","#4ade80","#38bdf8","#f5f5f5"].map(c => (
                 <div key={c} onClick={() => setHex(c)} style={{
                   width:20,height:20,borderRadius:3,background:c,cursor:"pointer",
-                  border:hex===c?"2px solid #fff":`1px solid ${C.bord}`,
+                  border:hex===c?`2px solid ${C.txt}`:`1px solid ${C.bord}`,
                 }}/>
               ))}
               <label style={{ fontSize:10, color:C.muted, fontFamily:MONO, cursor:"pointer" }}>
@@ -724,7 +754,7 @@ function RemapPanel({ selectedKeys }) {
           {cats.map(c => (
             <button key={c} onClick={()=>setCat(c)} style={{
               padding:"5px 10px", border:`1px solid ${cat===c?C.accent:C.bord}`,
-              borderRadius:4, background:cat===c?"rgba(255,212,92,.07)":"transparent",
+              borderRadius:4, background:cat===c?C.activeBg:"transparent",
               color:cat===c?C.accent:C.muted, fontSize:11, fontFamily:FONT, cursor:"pointer",
             }}>{c}</button>
           ))}
@@ -764,7 +794,7 @@ function AdvancedPanel({ selectedKeys }) {
           {["Key press","Key release","None"].map(t=>(
             <button key={t} onClick={()=>upd(i,"type",t)} style={{
               padding:"4px 8px", border:`1px solid ${rows[i].type===t?C.accent:C.bord}`,
-              borderRadius:4, background:rows[i].type===t?"rgba(255,212,92,.07)":"transparent",
+              borderRadius:4, background:rows[i].type===t?C.activeBg:"transparent",
               color:rows[i].type===t?C.accent:C.muted, fontSize:10, fontFamily:FONT, cursor:"pointer",
             }}>{t}</button>
           ))}
@@ -791,6 +821,8 @@ const IC = {
   rgb:  <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" strokeLinecap="round"/></svg>,
   gear: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" strokeLinecap="round"/></svg>,
   help: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3M12 17h.01" strokeLinecap="round"/></svg>,
+  sun:  <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" strokeLinecap="round"/></svg>,
+  moon: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><path d="M21 14.5A8.5 8.5 0 119.5 3a6.5 6.5 0 0011.5 11.5z" strokeLinecap="round" strokeLinejoin="round"/></svg>,
 };
 
 const NAV = [
@@ -809,6 +841,7 @@ const PCOLORS = ["#FFD45C","#a78bfa","#f97316","#38bdf8"];
    MAIN APP
 ───────────────────────────────────────────────────────────────────────────── */
 export default function App() {
+  const [themeName, setThemeName] = useState("dark");
   const [section, setSection]   = useState("quick");
   const [profile, setProfile]   = useState(0);
   const [selKeys, setSelKeys]   = useState(new Set());
@@ -881,7 +914,9 @@ export default function App() {
     if (connected) dSend("profile", CMD.setProfile(i), 0);
   };
 
+  C = THEMES[themeName];
   const pColor = PCOLORS[profile];
+  const isLight = themeName === "light";
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100vh",
@@ -892,7 +927,7 @@ export default function App() {
       <div style={{ display:"flex", flex:1, minHeight:0 }}>
 
         {/* ── ICON SIDEBAR ────────────────────────────────────────── */}
-        <div style={{ width:52, flexShrink:0, background:"#111213",
+        <div style={{ width:52, flexShrink:0, background:C.nav,
           borderRight:`1px solid ${C.bord}`, display:"flex", flexDirection:"column",
           alignItems:"center", paddingTop:10, gap:2 }}>
           <div style={{ width:32, height:32, borderRadius:7, background:C.accent,
@@ -908,16 +943,21 @@ export default function App() {
             }}>{n.icon}</button>
           ))}
           <div style={{ flex:1 }}/>
-          {[IC.gear, IC.help].map((ic,i) => (
-            <button key={i} style={{ width:38,height:38,borderRadius:6,background:"transparent",
-              border:"none",cursor:"pointer",color:C.muted,
+          <button onClick={() => setThemeName(isLight ? "dark" : "light")}
+            title={isLight ? "Switch to dark mode" : "Switch to light mode"}
+            aria-label={isLight ? "Switch to dark mode" : "Switch to light mode"}
+            style={{ width:38,height:38,borderRadius:6,background:isLight?C.activeBg:"transparent",
+              border:"none",cursor:"pointer",color:isLight?C.accent:C.muted,
               display:"flex",alignItems:"center",justifyContent:"center",
-              marginBottom:i===1?8:0 }}>{ic}</button>
-          ))}
+              marginBottom:0 }}>{isLight ? IC.moon : IC.sun}</button>
+          <button title="Help" aria-label="Help" style={{ width:38,height:38,borderRadius:6,background:"transparent",
+            border:"none",cursor:"pointer",color:C.muted,
+            display:"flex",alignItems:"center",justifyContent:"center",
+            marginBottom:8 }}>{IC.help}</button>
         </div>
 
         {/* ── TEXT SIDEBAR ────────────────────────────────────────── */}
-        <div style={{ width:210, flexShrink:0, background:"#1a1c1d",
+        <div style={{ width:210, flexShrink:0, background:C.panel,
           borderRight:`1px solid ${C.bord}`, display:"flex", flexDirection:"column", overflow:"hidden" }}>
           <div style={{ padding:"14px 14px 8px", borderBottom:`1px solid ${C.bord}` }}>
             <div style={{ fontSize:10, fontWeight:700, color:C.muted, letterSpacing:".06em",
@@ -940,7 +980,7 @@ export default function App() {
           {[0,1,2,3].map(i => (
             <button key={i} onClick={()=>handleProfileChange(i)} style={{
               display:"flex", alignItems:"center", gap:8, width:"100%", padding:"6px 14px",
-              background: profile===i&&section==="quick" ? "rgba(255,212,92,.07)" : "transparent",
+              background: profile===i&&section==="quick" ? C.activeBg : "transparent",
               border:"none", borderLeft:`2px solid ${profile===i&&section==="quick"?C.accent:"transparent"}`,
               cursor:"pointer", fontFamily:FONT, fontSize:12,
               color: profile===i?C.txt:C.muted,
@@ -964,7 +1004,7 @@ export default function App() {
           <NavItem icon="⊟" label="Advanced Keys"  active={section==="advanced"} onClick={()=>setSection("advanced")} badge="DKS"/>
 
           <div style={{ flex:1 }}/>
-          <div style={{ padding:"8px 14px", fontSize:9, color:"#3a3f44", borderTop:`1px solid ${C.bord}` }}>
+          <div style={{ padding:"8px 14px", fontSize:9, color:C.bord, borderTop:`1px solid ${C.bord}` }}>
             Wootility v5.3.1 clone
           </div>
         </div>
@@ -972,7 +1012,7 @@ export default function App() {
         {/* ── MAIN CONTENT ─────────────────────────────────────────── */}
         <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
           {/* topbar */}
-          <div style={{ height:52, flexShrink:0, background:"#1a1c1d",
+          <div style={{ height:52, flexShrink:0, background:C.panel,
             borderBottom:`1px solid ${C.bord}`,
             display:"flex", alignItems:"center", padding:"0 20px", gap:12 }}>
             <div style={{ width:32,height:32,borderRadius:"50%",
@@ -992,7 +1032,7 @@ export default function App() {
             {/* demo */}
             <button onClick={()=>setDemo(d=>!d)} style={{
               padding:"4px 10px", border:`1px solid ${demo?C.accent:C.bord}`,
-              borderRadius:4, background:demo?"rgba(255,212,92,.08)":"transparent",
+              borderRadius:4, background:demo?C.activeBg:"transparent",
               color:demo?C.accent:C.muted, fontSize:10, fontWeight:700,
               cursor:"pointer", fontFamily:FONT, letterSpacing:".05em",
             }}>{demo?"◉ DEMO":"○ DEMO"}</button>
@@ -1006,8 +1046,8 @@ export default function App() {
             <button onClick={() => connected ? dSend("save-profile", CMD.setProfile(profile), 0) : null}
               style={{ display:"flex",alignItems:"center",gap:6,
                 padding:"6px 14px",borderRadius:4,
-                background: connected ? C.accent : "#3a3a2a",
-                border:"none", color: connected ? C.atxt : "#6a6a4a",
+                background: connected ? C.accent : C.disabledBg,
+                border:"none", color: connected ? C.atxt : C.disabledTxt,
                 fontSize:12,fontWeight:700,cursor:connected?"pointer":"default",
                 fontFamily:FONT,
                 boxShadow: connected ? `0 0 10px ${C.accent}55` : "none" }}>
