@@ -1,109 +1,59 @@
 # FUN60 Driver
 
-<h3 align="center">
-Open-source WebHID configurator for the MonsGeek FUN60 Ultra TMR
-</h3>
+Browser-based configurator for the MonsGeek FUN60 Ultra TMR keyboard.
 
-<p align="center">
-A native-driver replacement built entirely in the browser.
-</p>
+FUN60 Driver is a Vite + React app that talks to the keyboard through the
+WebHID API. It is intended as an unofficial, open alternative to proprietary
+desktop configuration software.
 
----
+## Current Features
 
-## ✨ Features
+- Connects to the FUN60 Ultra TMR over WebHID.
+- Verifies the keyboard by vendor ID, product ID, usage page, usage, and device
+  ID before applying settings.
+- Reads the active profile, polling rate, LED settings, firmware version, and
+  magnetic switch settings after connection.
+- Provides a 60 percent ANSI keyboard visualizer with selectable keys.
+- Applies actuation point changes globally or to selected keys.
+- Enables or disables Rapid Trigger globally or per selected key.
+- Applies Rapid Trigger press sensitivity to selected keys or all mapped keys.
+- Supports polling rate selection from 125 Hz through 8000 Hz.
+- Controls LED power, mode, color, brightness, and speed.
+- Includes profile selection for four profile slots.
+- Includes a demo mode for visualizing analog key depth without hardware.
 
-FUN60 Driver is an open-source alternative configuration tool for the
-**MonsGeek FUN60 Ultra TMR**.
+The Remap and Dynamic Keystroke panels currently provide UI scaffolding only.
+They do not send remap or DKS configuration commands to the keyboard yet.
 
-It communicates directly with the keyboard using **WebHID**, removing the need
-for proprietary desktop software.
+## Supported Hardware
 
-### Supported
+The app is currently targeted at:
 
-✅ Web-based configuration  
-✅ No installation required  
-✅ Direct USB HID communication  
-✅ Per-key actuation control  
-✅ Rapid Trigger configuration  
-✅ Lift point adjustment  
-✅ RGB control  
-✅ Profile switching  
-✅ Polling rate control  
-✅ Live analog key depth support *(experimental)*  
+- MonsGeek FUN60 Ultra TMR
+- USB vendor ID: `0x3151`
+- USB product ID: `0x5030`
+- HID usage page: `0xFFFF`
+- HID usage: `0x02`
+- Device ID: `2307`
 
----
+The code assumes a RongYuan RY5088-style protocol and magnetic key mapping. Some
+right-side keys share firmware magnetic slot `63`, matching the keyboard
+firmware behavior noted in the source comments.
 
-## 🎯 Why?
+## Browser Requirements
 
-The FUN60 Ultra TMR uses a powerful magnetic switch system, but the official
-software limits customization.
+Use a Chromium-based browser with WebHID support:
 
-This project aims to provide:
+- Chrome
+- Edge
+- Brave
 
-- a cleaner UI
-- open protocol documentation
-- cross-platform support
-- scriptable keyboard configuration
-- community-driven development
+Firefox and Safari do not currently support WebHID.
 
----
+Because WebHID requires a secure context, run the app from `localhost` during
+development or from an HTTPS origin when deployed.
 
-# 🖥️ Tech Stack
-
-- React
-- WebHID API
-- JavaScript
-- Vite
-- Browser-native HID communication
-
-No:
-- native drivers
-- background services
-- proprietary installers
-
----
-
-# 🔌 Supported Hardware
-
-| Device | Support |
-|-|-|
-| MonsGeek FUN60 Ultra TMR | ✅ |
-| RY5088 platform keyboards | Experimental |
-
-Hardware details:
-
-- MCU: Artery AT32F405
-- Wireless MCU: Panchip PAN1080
-- Sensor: TMR magnetic switches
-- USB Vendor: `0x3151`
-- Product ID: `0x5030`
-
-The FUN60 uses the RongYuan RY5088 platform. :contentReference[oaicite:1]{index=1}
-
----
-
-# 🚀 Getting Started
-
-## Requirements
-
-- Chromium based browser
-  - Chrome
-  - Edge
-  - Brave
-
-WebHID is currently not supported by Firefox/Safari.
-
----
-
-## Installation
-
-Clone:
-
-```bash
-git clone https://github.com/Pikalev15/fun60-driver.git
-
-cd fun60-driver
-```
+## Getting Started
 
 Install dependencies:
 
@@ -111,186 +61,112 @@ Install dependencies:
 npm install
 ```
 
-Run:
+Start the development server:
 
 ```bash
 npm run dev
 ```
 
-Open the local website and press:
+Open the Vite URL in a Chromium-based browser, connect the keyboard by USB, and
+press **Connect Keyboard**.
 
-```
-Connect Keyboard
-```
+## Available Scripts
 
----
-
-# 🔧 How It Works
-
-The driver communicates through WebHID Feature Reports.
-
-Communication format:
-
-```
-64 byte HID Feature Report
-
-Byte 0:
-  Command opcode
-
-Byte 1-6:
-  Arguments
-
-Byte 7:
-  Checksum
+```bash
+npm run dev
 ```
 
-The keyboard exposes a vendor HID interface:
+Starts the Vite development server.
 
-```
-VID: 0x3151
-PID: 0x5030
-Usage Page: 0xFFFF
+```bash
+npm run build
 ```
 
----
+Builds the production bundle into `dist/`.
 
-# 🎚️ Magnetic Switch Control
-
-FUN60 Driver exposes the RY5088 magnetic commands:
-
-## Actuation Point
-
-Adjust when a key activates.
-
-Example:
-
-```
-0.1mm → 4.0mm range
+```bash
+npm run preview
 ```
 
----
+Serves the production build locally for preview.
 
-## Rapid Trigger
-
-Configure:
-
-- press sensitivity
-- release sensitivity
-
-Useful for:
-
-- competitive gaming
-- fast movement inputs
-- custom typing setups
-
----
-
-## Per-Key Configuration
-
-Every key can have independent:
-
-- actuation point
-- release point
-- rapid trigger values
-- key mode
-
----
-
-# 🌈 RGB
-
-Supported lighting controls:
-
-- static
-- breathing
-- wave
-- reactive
-- rainbow
-- custom per-key colors
-
----
-
-# 📁 Project Structure
-
-```
-src/
-
-├── lib/
-│   └── ry5088.js
-│       Protocol implementation
-
-├── hooks/
-│   └── useKeyboard.js
-│       WebHID connection layer
-
-├── components/
-
-│   ├── KeyboardViz.jsx
-│   ├── RTPanel.jsx
-│   ├── RGBPanel.jsx
-│   └── QuickSettings.jsx
-
-└── App.jsx
+```bash
+npm run lint
 ```
 
----
+Runs ESLint across the project.
 
-# 🧪 Development Status
+## Project Structure
 
-## Working
+```text
+.
+|-- public/
+|   |-- favicon.svg
+|   `-- icons.svg
+|-- src/
+|   |-- App.jsx
+|   |-- index.css
+|   |-- main.jsx
+|   `-- assets/
+|-- index.html
+|-- package.json
+|-- vite.config.js
+`-- eslint.config.js
+```
 
-✅ Device detection  
-✅ Hardware communication  
-✅ Actuation control  
-✅ Rapid Trigger  
-✅ RGB  
-✅ Profiles  
+Most of the app currently lives in `src/App.jsx`, including:
 
-## Planned
+- RY5088 command packet helpers
+- WebHID connection and settings reads
+- FUN60 keyboard layout metadata
+- visual keyboard selection
+- quick settings cards
+- RGB, remap, and advanced panels
+- main application shell
 
-⬜ Firmware tools  
-⬜ Wireless support  
-⬜ Better key visualizer  
-⬜ Macro editor  
-⬜ Advanced analog features  
+## Protocol Notes
 
----
+The app sends and receives 64-byte HID feature reports.
 
-# ⚠️ Disclaimer
+Implemented command areas include:
 
-This project is unofficial.
+- device info
+- active profile
+- polling rate
+- LED power and LED parameters
+- magnetic actuation, lift, Rapid Trigger press, Rapid Trigger lift, and mode
+  values
 
-It is not affiliated with:
+Magnetic switch distances are displayed in millimeters and encoded for the wire
+protocol as centi-millimeters.
 
-- MonsGeek
-- Akko
-- RongYuan
+## Development Status
 
-Use at your own risk.
+Working in the current code:
 
-Firmware flashing features may permanently damage your device if used incorrectly.
+- WebHID device selection and connection
+- feature-report communication
+- device identity check
+- settings read after connection
+- profile switching
+- actuation point writes
+- Rapid Trigger mode writes
+- Rapid Trigger sensitivity writes
+- polling rate writes
+- LED setting writes
+- interactive keyboard selection
 
----
+Present but not fully wired to hardware:
 
-# 🤝 Contributing
+- remapping
+- Dynamic Keystroke configuration
+- live analog depth from the keyboard
+- save semantics beyond sending the selected profile command
 
-Contributions welcome.
+## Disclaimer
 
-Ideas:
+This project is unofficial and is not affiliated with MonsGeek, Akko, RongYuan,
+or Wooting.
 
-- UI improvements
-- protocol testing
-- additional RY5088 devices
-- documentation
-
-Open an issue or submit a pull request.
-
----
-
-# 📜 Credits
-
-Protocol research:
-
-- RY5088 reverse engineering community
-- Contributors documenting the platform
-
-Built for the keyboard community ❤️
+Use it at your own risk. Keyboard configuration tools can change device state,
+and untested protocol writes may have unintended effects.
