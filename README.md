@@ -1,9 +1,5 @@
 # FUN60 Driver
 
-<p align="center">
-  <img src="docs/banner.png" alt="FUN60 Driver">
-</p>
-
 <h3 align="center">
 Open-source WebHID configurator for the MonsGeek FUN60 Ultra TMR
 </h3>
