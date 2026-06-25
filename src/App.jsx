@@ -6,8 +6,19 @@ import { useState, useEffect, useRef, useCallback } from "react";
 const VID = 0x3151, PID = 0x5030, USAGE_PAGE = 0xFFFF, DEV_ID = 2307;
 const RL  = 64; // report length
 
-const MAG = { PRESS: 0x00, LIFT: 0x01, RT_PRESS: 0x02, RT_LIFT: 0x03, MODE: 0x07 };
-const MODE = { NORMAL: 0, RT: 1, DKS: 2, MODTAP: 3, TOGGLE: 4, SNAPTAP: 5 };
+// Sub-command IDs verified against github.com/echtzeit-solutions/monsgeek-akko-linux
+// (hardware-read-verified + gRPC server built for official-app interop — more
+// authoritative than the dot-agi repo for these specific byte values).
+const MAG = {
+  PRESS: 0x00, LIFT: 0x01, RT_PRESS: 0x02, RT_LIFT: 0x03,
+  DKS_TRAVEL: 0x04, MODTAP_TIME: 0x05, BOTTOM_DZ: 0x06,
+  MODE: 0x07, SNAPTAP_EN: 0x09, DKS_MODES: 0x0A,
+  TOP_DZ: 0xFB, // firmware >= v10.24 only
+};
+// KEY_MODE (sub 0x07) byte values. Rapid Trigger is NOT a sequential value —
+// it's a separate high bit (0x80) layered on top of / instead of these.
+const MODE = { NORMAL: 0, DKS: 2, MODTAP: 3, TOGGLE_HOLD: 4, TOGGLE_DOTS: 5, SNAPTAP: 7 };
+const RT_BIT = 0x80;
 const POLL = { 8000: 0x00, 4000: 0x01, 2000: 0x02, 1000: 0x03, 500: 0x04, 250: 0x05, 125: 0x07 };
 const POLL_HZ = { 0x00: 8000, 0x01: 4000, 0x02: 2000, 0x03: 1000, 0x04: 500, 0x05: 250, 0x07: 125 };
 const LED_MODES = { 0x00: "Off", 0x01: "Static", 0x02: "Breathing", 0x03: "Wave",
@@ -73,8 +84,8 @@ function parseInfor(r) {
 function parseMagPage(r, sub) {
   // GET_MULTI_MAG response is RAW — no opcode echo
   const out = [];
-  if (sub === MAG.MODE) { for (let i = 0; i < 64; i++) out.push(r[i]); }
-  else                  { for (let i = 0; i < 32; i++) out.push(r[i*2] | (r[i*2+1] << 8)); }
+  if (sub === MAG.MODE || sub === MAG.SNAPTAP_EN) { for (let i = 0; i < 64; i++) out.push(r[i]); }
+  else { for (let i = 0; i < 32; i++) out.push(r[i*2] | (r[i*2+1] << 8)); }
   return out;
 }
 
@@ -131,6 +142,22 @@ const ROWS = [
   ],
 ];
 const ALL_KEYS = ROWS.flat();
+const KEY_CODE_TO_ID = {
+  Escape:"esc", Digit1:"k1", Digit2:"k2", Digit3:"k3", Digit4:"k4", Digit5:"k5",
+  Digit6:"k6", Digit7:"k7", Digit8:"k8", Digit9:"k9", Digit0:"k0",
+  Minus:"minus", Equal:"equal", Backspace:"bksp",
+  Tab:"tab", KeyQ:"q", KeyW:"w", KeyE:"e", KeyR:"r", KeyT:"t", KeyY:"y",
+  KeyU:"u", KeyI:"i", KeyO:"o", KeyP:"p", BracketLeft:"lbr",
+  BracketRight:"rbr", Backslash:"bsl",
+  CapsLock:"caps", KeyA:"a", KeyS:"s", KeyD:"d", KeyF:"f", KeyG:"g",
+  KeyH:"h", KeyJ:"j", KeyK:"k", KeyL:"l", Semicolon:"semi",
+  Quote:"apos", Enter:"ent",
+  ShiftLeft:"lsh", KeyZ:"z", KeyX:"x", KeyC:"c", KeyV:"v", KeyB:"b",
+  KeyN:"n", KeyM:"m", Comma:"com", Period:"dot", Slash:"fsl",
+  ShiftRight:"rsh",
+  ControlLeft:"lctl", MetaLeft:"lwin", AltLeft:"lalt", Space:"spc",
+  AltRight:"ralt", ContextMenu:"menu", ControlRight:"rctl",
+};
 
 /* ─────────────────────────────────────────────────────────────────────────────
    DESIGN TOKENS  (extracted from Wootility 5.3.1 source)
@@ -406,7 +433,7 @@ function ConnectBanner({ hidOK, status, info, err, onConnect, onDisconnect }) {
 /* ─────────────────────────────────────────────────────────────────────────────
    KEYBOARD VIZ
 ───────────────────────────────────────────────────────────────────────────── */
-function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDeselect }) {
+function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDeselect, onSimPress, onSimRelease }) {
   const [hov, setHov] = useState(null);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
@@ -437,8 +464,14 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
               return (
                 <button key={key.id}
                   onClick={() => onKeyClick(key.id)}
+                  onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); onSimPress?.(key.id); }}
+                  onPointerUp={e => {
+                    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+                    onSimRelease?.(key.id);
+                  }}
+                  onPointerCancel={() => onSimRelease?.(key.id)}
                   onMouseEnter={() => setHov(key.id)}
-                  onMouseLeave={() => setHov(null)}
+                  onMouseLeave={() => { setHov(null); onSimRelease?.(key.id); }}
                   title={`${key.l||"Space"} · idx ${key.magIdx}${key.shared?" (shared)":""} · ${(d*4).toFixed(2)}mm`}
                   style={{
                     width:kw(key.u), height:38, borderRadius:4, flexShrink:0,
@@ -569,7 +602,7 @@ function RTCard({ rtOn, setRtOn, sens, setSens, split, setSplit, press, setPress
   const handleToggle = v => {
     setRtOn(v);
     if (!connected) return;
-    const mode = v ? MODE.RT : MODE.NORMAL;
+    const mode = v ? RT_BIT : MODE.NORMAL;
     if (selArr.length === 0) dSend("rt-mode-global", CMD.setGlobalMode(mode));
     else selArr.forEach(id => {
       const k = ALL_KEYS.find(x => x.id === id);
@@ -776,35 +809,182 @@ function RemapPanel({ selectedKeys }) {
   );
 }
 
-function AdvancedPanel({ selectedKeys }) {
+function AdvancedPanel({ selectedKeys, connected, dSend, socdPairs, setSocdPairs }) {
+  const [tab, setTab] = useState("dks"); // dks | socd | modtap | toggle
+  const selArr = [...selectedKeys];
+  const selKeyObjs = selArr.map(id => ALL_KEYS.find(k => k.id === id)).filter(Boolean);
+
+  // ---- DKS ----
   const depths = [0.5,1.5,2.5,3.5];
   const [rows, setRows] = useState(depths.map(()=>({type:"None",key:""})));
   const upd = (i,k,v) => setRows(p=>p.map((r,j)=>j===i?{...r,[k]:v}:r));
+
+  // ---- SOCD / Snap-Tap ----
+  const canPair = selKeyObjs.length === 2 && selKeyObjs.every(k => k.magIdx >= 0);
+  const setKeyMode = (k, mode, snapEn) => {
+    if (!connected || !k || k.magIdx < 0) return;
+    dSend(`mode-${k.magIdx}`, CMD.setMag(MAG.MODE, k.magIdx, mode));
+    if (snapEn !== undefined) dSend(`snapen-${k.magIdx}`, CMD.setMag(MAG.SNAPTAP_EN, k.magIdx, snapEn));
+  };
+  const makePair = () => {
+    const [k1, k2] = selKeyObjs;
+    setKeyMode(k1, MODE.SNAPTAP, 1);
+    setKeyMode(k2, MODE.SNAPTAP, 1);
+    setSocdPairs(p => [...p, [k1.id, k2.id]]);
+  };
+  const removePair = idx => {
+    const [id1, id2] = socdPairs[idx];
+    [id1, id2].forEach(id => setKeyMode(ALL_KEYS.find(k => k.id === id), MODE.NORMAL, 0));
+    setSocdPairs(p => p.filter((_, i) => i !== idx));
+  };
+
+  // ---- Mod-Tap ----
+  const [modTapMs, setModTapMs] = useState(180);
+  const applyModTap = () => selKeyObjs.forEach(k => {
+    if (k.magIdx < 0) return;
+    setKeyMode(k, MODE.MODTAP);
+    if (connected) dSend(`modtap-${k.magIdx}`, CMD.setMag(MAG.MODTAP_TIME, k.magIdx, modTapMs));
+  });
+
+  // ---- Toggle ----
+  const applyToggle = variant => selKeyObjs.forEach(k => setKeyMode(k, variant));
+
+  const resetSelected = () => selKeyObjs.forEach(k => setKeyMode(k, MODE.NORMAL, 0));
+
+  const TABS = [["dks","DKS"],["socd","SOCD / Snap-Tap"],["modtap","Mod-Tap"],["toggle","Toggle"]];
+
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-      <div style={{ fontSize:13, fontWeight:700, color:C.txt }}>Dynamic Keystroke</div>
-      <div style={{ fontSize:12, color:C.muted }}>
-        4 actions at fixed depths.{selectedKeys.size===0?" Select a key to configure.":""}
+    <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+        {TABS.map(([id,label]) => (
+          <button key={id} onClick={()=>setTab(id)} style={{
+            padding:"6px 12px", border:`1px solid ${tab===id?C.accent:C.bord}`,
+            borderRadius:5, background:tab===id?C.activeBg:"transparent",
+            color:tab===id?C.accent:C.muted, fontSize:11, fontFamily:FONT,
+            cursor:"pointer", fontWeight:tab===id?700:400,
+          }}>{label}</button>
+        ))}
       </div>
-      {selectedKeys.size>0 && depths.map((d,i)=>(
-        <div key={d} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 14px",
-          background:C.over, borderRadius:6, border:`1px solid ${C.bord}` }}>
-          <span style={{ width:44, fontFamily:MONO, fontSize:12, color:C.accent, fontWeight:700 }}>{d.toFixed(1)} mm</span>
-          <div style={{ width:1, height:20, background:C.bord }}/>
-          {["Key press","Key release","None"].map(t=>(
-            <button key={t} onClick={()=>upd(i,"type",t)} style={{
-              padding:"4px 8px", border:`1px solid ${rows[i].type===t?C.accent:C.bord}`,
-              borderRadius:4, background:rows[i].type===t?C.activeBg:"transparent",
-              color:rows[i].type===t?C.accent:C.muted, fontSize:10, fontFamily:FONT, cursor:"pointer",
-            }}>{t}</button>
+
+      {tab==="dks" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={{ fontSize:12, color:C.muted }}>
+            4 actions at fixed depths.{selectedKeys.size===0?" Select a key to configure.":""}
+          </div>
+          {selectedKeys.size>0 && depths.map((d,i)=>(
+            <div key={d} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 14px",
+              background:C.over, borderRadius:6, border:`1px solid ${C.bord}` }}>
+              <span style={{ width:44, fontFamily:MONO, fontSize:12, color:C.accent, fontWeight:700 }}>{d.toFixed(1)} mm</span>
+              <div style={{ width:1, height:20, background:C.bord }}/>
+              {["Key press","Key release","None"].map(t=>(
+                <button key={t} onClick={()=>upd(i,"type",t)} style={{
+                  padding:"4px 8px", border:`1px solid ${rows[i].type===t?C.accent:C.bord}`,
+                  borderRadius:4, background:rows[i].type===t?C.activeBg:"transparent",
+                  color:rows[i].type===t?C.accent:C.muted, fontSize:10, fontFamily:FONT, cursor:"pointer",
+                }}>{t}</button>
+              ))}
+              {rows[i].type!=="None" && <input value={rows[i].key} maxLength={4}
+                onChange={e=>upd(i,"key",e.target.value.toUpperCase())}
+                placeholder="A" style={{ width:40, padding:"4px 7px", fontFamily:MONO,
+                  background:C.surf, border:`1px solid ${C.bord}`, borderRadius:4,
+                  color:C.txt, fontSize:12, outline:"none", textAlign:"center", marginLeft:"auto" }}/>}
+            </div>
           ))}
-          {rows[i].type!=="None" && <input value={rows[i].key} maxLength={4}
-            onChange={e=>upd(i,"key",e.target.value.toUpperCase())}
-            placeholder="A" style={{ width:40, padding:"4px 7px", fontFamily:MONO,
-              background:C.surf, border:`1px solid ${C.bord}`, borderRadius:4,
-              color:C.txt, fontSize:12, outline:"none", textAlign:"center", marginLeft:"auto" }}/>}
         </div>
-      ))}
+      )}
+
+      {tab==="socd" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ fontSize:12, color:C.muted }}>
+            Select exactly 2 keys (e.g. A + D) and pair them. Both are flagged Snap-Tap —
+            pressing one while the other is held releases the older one (last-input-wins SOCD).
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <span style={{ fontSize:11, color:C.muted }}>
+              {selKeyObjs.length===0 ? "No keys selected" :
+               selKeyObjs.length===2 ? `${selKeyObjs.map(k=>k.l||"Space").join(" + ")} selected` :
+               `${selKeyObjs.length} selected — need exactly 2`}
+            </span>
+            <button disabled={!canPair} onClick={makePair} style={{
+              marginLeft:"auto", padding:"5px 12px", borderRadius:5, border:"none",
+              background: canPair?C.accent:C.disabledBg, color: canPair?C.atxt:C.disabledTxt,
+              fontSize:11, fontWeight:700, cursor: canPair?"pointer":"default", fontFamily:FONT,
+            }}>Set as SOCD pair</button>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {socdPairs.length===0 && <div style={{ fontSize:11, color:C.muted, fontStyle:"italic" }}>No pairs configured yet.</div>}
+            {socdPairs.map(([id1,id2], i) => {
+              const k1 = ALL_KEYS.find(k=>k.id===id1), k2 = ALL_KEYS.find(k=>k.id===id2);
+              return (
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 12px",
+                  background:C.over, borderRadius:6, border:`1px solid ${C.bord}` }}>
+                  <span style={{ fontFamily:MONO, fontSize:12, color:C.accent, fontWeight:700 }}>
+                    {k1?.l||"Space"} ↔ {k2?.l||"Space"}
+                  </span>
+                  <button onClick={()=>removePair(i)} style={{
+                    marginLeft:"auto", padding:"3px 9px", borderRadius:4, border:`1px solid ${C.bord}`,
+                    background:"transparent", color:C.muted, fontSize:10, cursor:"pointer", fontFamily:FONT,
+                  }}>Remove</button>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:10, color:C.muted, fontStyle:"italic", paddingTop:6, borderTop:`1px solid ${C.bord}` }}>
+            Pairing is tracked here in the app only — the keyboard itself just stores a
+            Snap-Tap flag per key, not which other key it's paired with.
+          </div>
+        </div>
+      )}
+
+      {tab==="modtap" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ fontSize:12, color:C.muted }}>
+            {selKeyObjs.length===0
+              ? "Select a key to make it dual-function — tap for the normal key, hold for a modifier."
+              : `Configuring ${selKeyObjs.length} key${selKeyObjs.length>1?"s":""}.`}
+          </div>
+          {selKeyObjs.length>0 && <>
+            <Slider label="Hold threshold" value={modTapMs} min={80} max={400} step={10} unit=" ms" onChange={setModTapMs}/>
+            <button onClick={applyModTap} style={{
+              padding:"6px 14px", borderRadius:5, border:"none", alignSelf:"flex-start",
+              background:C.accent, color:C.atxt, fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:FONT,
+            }}>Apply Mod-Tap</button>
+            <div style={{ fontSize:10, color:C.muted, fontStyle:"italic" }}>
+              Sets the hold/tap timing threshold. Assigning which key fires on tap vs. hold
+              isn't wired up yet — that needs the keymatrix remap command.
+            </div>
+          </>}
+        </div>
+      )}
+
+      {tab==="toggle" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ fontSize:12, color:C.muted }}>
+            {selKeyObjs.length===0
+              ? "Select key(s) to make them latch on/off instead of momentary."
+              : `Configuring ${selKeyObjs.length} key${selKeyObjs.length>1?"s":""}.`}
+          </div>
+          {selKeyObjs.length>0 && (
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              <button onClick={()=>applyToggle(MODE.TOGGLE_HOLD)} style={{
+                padding:"7px 14px", borderRadius:5, border:`1px solid ${C.bord}`,
+                background:C.surf, color:C.txt, fontSize:12, cursor:"pointer", fontFamily:FONT,
+              }}>Toggle (Hold variant)</button>
+              <button onClick={()=>applyToggle(MODE.TOGGLE_DOTS)} style={{
+                padding:"7px 14px", borderRadius:5, border:`1px solid ${C.bord}`,
+                background:C.surf, color:C.txt, fontSize:12, cursor:"pointer", fontFamily:FONT,
+              }}>Toggle (Dots variant)</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {selKeyObjs.length>0 && tab!=="dks" && (
+        <button onClick={resetSelected} style={{
+          alignSelf:"flex-start", padding:"4px 11px", borderRadius:4, border:`1px solid ${C.bord}`,
+          background:"transparent", color:C.muted, fontSize:10, cursor:"pointer", fontFamily:FONT,
+        }}>Reset selected to Normal</button>
+      )}
     </div>
   );
 }
@@ -863,6 +1043,7 @@ export default function App() {
   const [ledR,     setLedR]     = useState(255);
   const [ledG,     setLedG]     = useState(255);
   const [ledB,     setLedB]     = useState(255);
+  const [socdPairs, setSocdPairs] = useState([]); // [[keyId1, keyId2], ...] — UI-only grouping
 
   // Populate state from keyboard on connect
   const onSettings = useCallback(s => {
@@ -879,30 +1060,83 @@ export default function App() {
     if (s.mag) {
       if (s.mag[MAG.PRESS]?.[0])    setAp(cmm(s.mag[MAG.PRESS][0]));
       if (s.mag[MAG.RT_PRESS]?.[0]) setSens(cmm(s.mag[MAG.RT_PRESS][0]));
-      if (s.mag[MAG.MODE]?.[0] !== undefined) setRtOn(s.mag[MAG.MODE][0] === MODE.RT);
+      if (s.mag[MAG.MODE]?.[0] !== undefined) setRtOn((s.mag[MAG.MODE][0] & RT_BIT) !== 0);
     }
   }, []);
 
   const { hidOK, status, info, err, connect, disconnect, send, dSend } = useKeyboard({ onSettings });
   const connected = status === "connected";
 
-  // Demo animation
-  const animRef = useRef(null); const stRef = useRef({}); const velRef = useRef({});
+  // Demo animation: simulated key travel driven by physical or pointer presses.
+  const simFrameRef = useRef(null);
+  const simDepthRef = useRef({});
+  const simPressedRef = useRef(new Set());
+
+  const setSimKey = useCallback((id, pressed) => {
+    if (!demo || !id) return;
+    if (pressed) simPressedRef.current.add(id);
+    else simPressedRef.current.delete(id);
+  }, [demo]);
+
   useEffect(() => {
-    if (!demo) { clearInterval(animRef.current); setDepths({}); return; }
-    const keys = ["w","a","s","d","q","e","r","f","spc","lsh","c","v","k1","k2","j","k","l"];
-    keys.forEach(k => { stRef.current[k] = Math.random()*.2; velRef.current[k] = (Math.random()-.5)*.04; });
-    animRef.current = setInterval(() => {
-      keys.forEach(k => {
-        let v = velRef.current[k]||0, d = (stRef.current[k]||0)+v;
-        if(d>1){d=1;velRef.current[k]=-Math.abs(v);}
-        if(d<0){d=0;velRef.current[k]= Math.abs(v);}
-        if(Math.random()<.018) velRef.current[k]=(Math.random()-.5)*.06;
-        stRef.current[k]=d;
+    if (!demo) {
+      cancelAnimationFrame(simFrameRef.current);
+      simPressedRef.current.clear();
+      simDepthRef.current = {};
+      setDepths({});
+      return;
+    }
+
+    let last = performance.now();
+    const tick = now => {
+      const dt = Math.min(34, now - last) / 16.67;
+      last = now;
+
+      const next = { ...simDepthRef.current };
+      const ids = new Set([...Object.keys(next), ...simPressedRef.current]);
+      ids.forEach(id => {
+        const target = simPressedRef.current.has(id) ? 1 : 0;
+        const current = next[id] || 0;
+        const speed = target > current ? 0.28 : 0.18;
+        const value = current + (target - current) * Math.min(1, speed * dt);
+        if (target === 0 && value < 0.01) delete next[id];
+        else next[id] = Math.max(0, Math.min(1, value));
       });
-      setDepths({...stRef.current});
-    }, 33);
-    return () => clearInterval(animRef.current);
+
+      simDepthRef.current = next;
+      setDepths(next);
+      simFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    simFrameRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(simFrameRef.current);
+  }, [demo]);
+
+  useEffect(() => {
+    if (!demo) return;
+
+    const isEditable = el =>
+      el?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el?.tagName);
+    const keyDown = e => {
+      if (isEditable(e.target) || e.repeat) return;
+      const id = KEY_CODE_TO_ID[e.code];
+      if (!id) return;
+      e.preventDefault();
+      simPressedRef.current.add(id);
+    };
+    const keyUp = e => {
+      const id = KEY_CODE_TO_ID[e.code];
+      if (!id) return;
+      e.preventDefault();
+      simPressedRef.current.delete(id);
+    };
+
+    window.addEventListener("keydown", keyDown);
+    window.addEventListener("keyup", keyUp);
+    return () => {
+      window.removeEventListener("keydown", keyDown);
+      window.removeEventListener("keyup", keyUp);
+    };
   }, [demo]);
 
   const toggleKey = useCallback(id => {
@@ -1066,6 +1300,8 @@ export default function App() {
             {/* keyboard */}
             <KeyboardViz keyDepths={depths} selectedKeys={selKeys}
               onKeyClick={toggleKey}
+              onSimPress={id => setSimKey(id, true)}
+              onSimRelease={id => setSimKey(id, false)}
               onSelectAll={()=>setSelKeys(new Set(ALL_KEYS.map(k=>k.id)))}
               onDeselect={()=>setSelKeys(new Set())}/>
 
@@ -1102,7 +1338,7 @@ export default function App() {
                                            ledB={ledB} setLedB={setLedB} ledSpeed={ledSpeed} setLedSpeed={setLedSpeed}
                                            ledBri={ledBri} setLedBri={setLedBri} connected={connected} dSend={dSend}/>}
                 {section==="remap"    && <RemapPanel selectedKeys={selKeys}/>}
-                {section==="advanced" && <AdvancedPanel selectedKeys={selKeys}/>}
+                {section==="advanced" && <AdvancedPanel selectedKeys={selKeys} connected={connected} dSend={dSend} socdPairs={socdPairs} setSocdPairs={setSocdPairs}/>}
               </div>
             )}
             <div style={{ height:20 }}/>
