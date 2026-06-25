@@ -160,4 +160,4 @@ This project is unofficial and is not affiliated with MonsGeek, Akko, RongYuan,
 or Wooting.
 
 Use it at your own risk. Keyboard configuration tools can change device state,
-and untested protocol writes may have unintended effects.
+and untested protocol writes may have unintended effects. As of now, this project is in a horribly experimental state. Enjoy!
