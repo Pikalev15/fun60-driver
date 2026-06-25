@@ -14,11 +14,14 @@ browser.
 ---
 
 ## Overview
-
-FUN60 Driver connects to the FUN60 Ultra TMR through the browser's WebHID API.
+This web based driver connects to the FUN60 Ultra TMR through the browser's WebHID API.
 It reads the keyboard's current settings, exposes a visual 60 percent layout,
 and sends feature-report commands for magnetic switch, polling, profile, and RGB
 configuration.
+
+Big Thanks to dot-agi for creating https://github.com/dot-agi/ry5088-flasher as a baseline reference for all of the opcodes nessacary for creating this driver
+
+Also thanks to https://github.com/echtzeit-solutions/monsgeek-akko-linux/ for exposing certain opcodes like dks and snaptap
 
 | Area | Status |
 | --- | --- |
@@ -32,6 +35,7 @@ configuration.
 | Remap panel | UI only |
 | Dynamic Keystroke panel | UI only |
 | Live analog depth from hardware | Not wired yet |
+| SOCD (snap tap) | Partially applied (untestested) |
 
 ## Features
 
