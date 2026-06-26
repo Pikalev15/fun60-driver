@@ -15,10 +15,10 @@ const MAG = {
   MODE: 0x07, SNAPTAP_EN: 0x09, DKS_MODES: 0x0A,
   TOP_DZ: 0xFB, // firmware >= v10.24 only
 };
-// KEY_MODE (sub 0x07) byte values. Rapid Trigger is NOT a sequential value —
-// it's a separate high bit (0x80) layered on top of / instead of these.
-const MODE = { NORMAL: 0, DKS: 2, MODTAP: 3, TOGGLE_HOLD: 4, TOGGLE_DOTS: 5, SNAPTAP: 7 };
-const RT_BIT = 0x80;
+// KEY_MODE (sub 0x07) byte values from the MonsGeek/Akko protocol docs.
+// Rapid Trigger is mode 1, DKS is 2, Mod-Tap is 3, Toggle is 4, Snap-Tap is 5.
+const MODE = { NORMAL: 0, RAPID_TRIGGER: 1, DKS: 2, MODTAP: 3, TOGGLE_HOLD: 4, TOGGLE_DOTS: 4, SNAPTAP: 5 };
+const RT_BIT = MODE.RAPID_TRIGGER;
 const POLL = { 8000: 0x00, 4000: 0x01, 2000: 0x02, 1000: 0x03, 500: 0x04, 250: 0x05, 125: 0x07 };
 const POLL_HZ = { 0x00: 8000, 0x01: 4000, 0x02: 2000, 0x03: 1000, 0x04: 500, 0x05: 250, 0x07: 125 };
 const LED_MODES = { 0x00: "Off", 0x01: "Static", 0x02: "Breathing", 0x03: "Wave",
@@ -55,6 +55,9 @@ const CMD = {
     p[0]=0x07; p[1]=mode; p[2]=spd; p[3]=bri; p[4]=0; p[5]=r; p[6]=g; p[7]=b;
     return bit8(p);
   },
+  // Enable/disable live magnetic key depth input events.
+  // Emits input report 0x05 event 0x1B: [0x1B, lo, hi, keyIdx].
+  setMagnetismReport: on => pkt(0x1B, [on ? 1 : 0]),
   // Magnetism — single key. valueCmm in centi-mm (200 = 2.00 mm)
   setMag: (sub, keyIdx, valueCmm) => {
     const r = new Uint8Array(RL);
@@ -87,6 +90,38 @@ function parseMagPage(r, sub) {
   if (sub === MAG.MODE || sub === MAG.SNAPTAP_EN) { for (let i = 0; i < 64; i++) out.push(r[i]); }
   else { for (let i = 0; i < 32; i++) out.push(r[i*2] | (r[i*2+1] << 8)); }
   return out;
+}
+
+
+// Exact live magnetic telemetry parser from monsgeek-akko-linux docs.
+// Raw HID frame: 05 1B lo hi idx
+// WebHID exposes reportId separately, so event.data is: [1B, lo, hi, idx, ...]
+function parseTelemetryDepth(reportId, data) {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data.buffer || data);
+  if (reportId !== 0x05 || bytes.length < 4 || bytes[0] !== 0x1B) return null;
+
+  const raw = bytes[1] | (bytes[2] << 8);
+  const idx = bytes[3];
+
+  // Docs describe magnetic values with a precision factor, commonly raw/10
+  // (20 -> 2.0 mm). Some configs elsewhere use centi-mm, so keep a safe
+  // fallback if /10 would be impossible for a 4 mm switch.
+  let scale = 10;
+  let mmTravel = raw / scale;
+  if (mmTravel > 4.5 && raw / 100 <= 4.5) {
+    scale = 100;
+    mmTravel = raw / scale;
+  }
+
+  const key = ALL_KEYS.find(k => k.magIdx === idx);
+  if (!key) return { idx, raw, mm: mmTravel, normalized: 0, format: `0x05/0x1B raw/${scale}` };
+
+  const normalized = Math.max(0, Math.min(1, mmTravel / 4.0));
+  return {
+    idx, raw, mm: mmTravel, normalized, keyId: key.id,
+    depths: normalized > 0.01 ? { [key.id]: normalized } : {},
+    format: `0x05/0x1B raw/${scale}`,
+  };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -209,12 +244,15 @@ const MONO = "'JetBrains Mono',monospace";
 /* ─────────────────────────────────────────────────────────────────────────────
    useKeyboard HOOK
 ───────────────────────────────────────────────────────────────────────────── */
-function useKeyboard({ onSettings }) {
+function useKeyboard({ onSettings, onTelemetry }) {
   const dev      = useRef(null);
+  const liveDev  = useRef(null);
   const debounce = useRef({});
   const [status, setStatus] = useState("idle"); // idle|connecting|connected|error
   const [info,   setInfo]   = useState(null);
   const [err,    setErr]    = useState(null);
+  const [telemetry, setTelemetry] = useState("off"); // off|connecting|on|error
+  const [telemetryFmt, setTelemetryFmt] = useState(null);
   const hidOK = typeof navigator !== "undefined" && "hid" in navigator;
 
   const send = useCallback(async report => {
@@ -254,6 +292,50 @@ function useKeyboard({ onSettings }) {
     } catch (e) { console.warn("readSettings partial failure:", e); return {}; }
   }, [send]);
 
+
+
+  const openTelemetry = useCallback(async () => {
+    if (!hidOK || !navigator.hid) return;
+    setTelemetry("connecting");
+    try {
+      let devices = await navigator.hid.getDevices();
+      const hasDepthInput = d =>
+        d.vendorId === VID && d.productId === PID &&
+        d.collections.some(c =>
+          c.inputReports?.some(r => r.reportId === 0x05) ||
+          (c.usagePage === USAGE_PAGE && c.inputReports?.length > 0)
+        );
+      let live = devices.find(hasDepthInput);
+
+      // If permission for the live/input collection was not granted yet,
+      // request by VID/PID, then pick the collection that exposes input report 0x05.
+      if (!live) {
+        const matches = await navigator.hid.requestDevice({
+          filters: [{ vendorId: VID, productId: PID }]
+        });
+        live = matches.find(hasDepthInput) || matches.find(d => d.collections.some(c => c.inputReports?.length > 0)) || matches[0];
+      }
+      if (!live) { setTelemetry("off"); return; }
+      if (!live.opened) await live.open();
+      liveDev.current = live;
+
+      live.addEventListener("inputreport", event => {
+        const parsed = parseTelemetryDepth(event.reportId, new Uint8Array(event.data.buffer));
+        if (!parsed) return;
+        setTelemetryFmt(parsed.format);
+        onTelemetry?.(parsed);
+      });
+      live.addEventListener("disconnect", () => {
+        liveDev.current = null;
+        setTelemetry("off");
+      });
+      setTelemetry("on");
+    } catch (e) {
+      console.warn("telemetry open failed:", e);
+      setTelemetry("error");
+    }
+  }, [hidOK, onTelemetry]);
+
   const connect = useCallback(async () => {
     if (!hidOK) return;
     setStatus("connecting"); setErr(null);
@@ -290,16 +372,25 @@ function useKeyboard({ onSettings }) {
       setStatus("reading");
       const s = await readSettings();
       onSettings?.(s);
+      // Ask firmware to start emitting live magnetic depth events:
+      // input report 0x05, event type 0x1B, payload lo/hi/index.
+      try { await send(CMD.setMagnetismReport(true)); }
+      catch (e) { console.warn("could not enable magnetism report:", e); }
       setStatus("connected");
+      // Attach the live HID input stream so Visual Feedback can use real switch
+      // travel instead of demo keydown.
+      openTelemetry().catch(console.error);
     } catch (e) { setStatus("error"); setErr(e.message); dev.current = null; }
-  }, [hidOK, send, readSettings, onSettings]);
+  }, [hidOK, send, readSettings, onSettings, openTelemetry]);
 
   const disconnect = useCallback(async () => {
+    try { if (dev.current) await send(CMD.setMagnetismReport(false)); } catch {}
+    try { await liveDev.current?.close(); } catch {}
     try { await dev.current?.close(); } catch {}
-    dev.current = null; setStatus("idle"); setInfo(null);
-  }, []);
+    liveDev.current = null; dev.current = null; setStatus("idle"); setInfo(null); setTelemetry("off");
+  }, [send]);
 
-  return { hidOK, status, info, err, connect, disconnect, send, dSend };
+  return { hidOK, status, info, err, telemetry, telemetryFmt, connect, disconnect, send, dSend, openTelemetry };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -389,7 +480,7 @@ function NavItem({ icon, label, active, badge, onClick }) {
 /* ─────────────────────────────────────────────────────────────────────────────
    CONNECTION BANNER
 ───────────────────────────────────────────────────────────────────────────── */
-function ConnectBanner({ hidOK, status, info, err, onConnect, onDisconnect }) {
+function ConnectBanner({ hidOK, status, info, err, telemetry, telemetryFmt, onConnect, onDisconnect, onTelemetryConnect }) {
   if (status === "connected") return (
     <div style={{
       display:"flex", alignItems:"center", gap:10,
@@ -399,6 +490,14 @@ function ConnectBanner({ hidOK, status, info, err, onConnect, onDisconnect }) {
       <div style={{ width:8, height:8, borderRadius:4, background:C.green, boxShadow:`0 0 6px ${C.green}` }}/>
       <span style={{ fontSize:12, color:C.green, fontWeight:600 }}>Connected</span>
       {info && <span style={{ fontSize:11, color:C.muted, fontFamily:MONO }}>{info.version} · dev_id {info.devId}</span>}
+      <span style={{ fontSize:11, color: telemetry === "on" ? C.green : telemetry === "error" ? C.red : C.muted, fontFamily:MONO }}>
+        live HID: {telemetry === "on" ? `on · ${telemetryFmt || "auto"}` : telemetry}
+      </span>
+      {telemetry !== "on" && <button onClick={onTelemetryConnect} style={{
+        marginLeft:"auto", padding:"3px 10px", border:`1px solid ${C.bord}`,
+        borderRadius:4, background:"transparent", color:C.muted,
+        fontSize:10, cursor:"pointer", fontFamily:FONT,
+      }}>Enable live HID</button>}
       <button onClick={onDisconnect} style={{
         marginLeft:"auto", padding:"3px 10px", border:`1px solid ${C.bord}`,
         borderRadius:4, background:"transparent", color:C.muted,
@@ -611,10 +710,150 @@ function SelectedKeyDetails({ selectedKeys, mode, apByIdx, liftByIdx, rtPressByI
   );
 }
 
+
+function KeyTravelPreview({ depths, selectedKeys, ap }) {
+  const selected = [...selectedKeys];
+  const pool = selected.length ? selected : Object.keys(depths || {});
+  let activeId = pool[0] || null;
+  let depth = 0;
+  pool.forEach(id => {
+    const d = depths?.[id] || 0;
+    if (d >= depth) { depth = d; activeId = id; }
+  });
+  const key = ALL_KEYS.find(k => k.id === activeId);
+  const label = key?.l || (activeId === "spc" ? "Space" : "—");
+  const travelMm = Math.max(0, Math.min(4, depth * 4));
+  const apNorm = Math.max(0, Math.min(1, ap / 4));
+  const fillPct = Math.max(0, Math.min(100, depth * 100));
+  const stemDrop = Math.max(0, Math.min(24, depth * 24));
+  const capDrop = Math.max(0, Math.min(18, depth * 18));
+  const pressed = depth > 0.025;
+  const actuated = travelMm >= ap && pressed;
+
+  return (
+    <div style={{
+      marginTop:10, padding:"14px 14px 12px", borderRadius:10,
+      background:`linear-gradient(180deg,${C.over},${C.panel})`,
+      border:`1px solid ${actuated ? C.accent : C.bord}`,
+      boxShadow: actuated ? `0 0 18px ${C.accent}22, inset 0 1px 0 rgba(255,255,255,.04)` : "inset 0 1px 0 rgba(255,255,255,.035)",
+      display:"grid", gridTemplateColumns:"minmax(160px,1fr) 74px", gap:16,
+      alignItems:"center", overflow:"hidden",
+      transition:"border-color .16s ease, box-shadow .16s ease",
+    }}>
+      <div style={{ minHeight:128, position:"relative", display:"flex", alignItems:"center", justifyContent:"center", perspective:520 }}>
+        <div style={{
+          position:"absolute", bottom:8, width:158, height:24, borderRadius:"50%",
+          background:"rgba(0,0,0,.28)", filter:"blur(8px)",
+          transform:`scale(${1 + depth*.09})`, opacity:.65,
+          transition:"transform .06s linear, opacity .12s ease",
+        }}/>
+
+        {/* switch housing */}
+        <div style={{
+          position:"relative", width:154, height:84,
+          transform:"rotateX(58deg) rotateZ(-28deg)", transformStyle:"preserve-3d",
+        }}>
+          <div style={{
+            position:"absolute", inset:"28px 18px 0", borderRadius:8,
+            background:"linear-gradient(135deg,#24272a,#111314)",
+            border:`1px solid ${C.bord}`, transform:"translateZ(0px)",
+            boxShadow:"0 15px 28px rgba(0,0,0,.45)",
+          }}/>
+          <div style={{
+            position:"absolute", left:20, right:20, top:13, height:54, borderRadius:7,
+            background:"linear-gradient(135deg,#78f0b1,#32b879 62%,#1c6f4f)",
+            clipPath:"polygon(9% 0,91% 0,100% 100%,0 100%)",
+            border:`1px solid rgba(255,255,255,.22)`,
+            boxShadow: actuated ? `0 0 20px ${C.green}44, inset 0 1px 0 rgba(255,255,255,.35)` : "inset 0 1px 0 rgba(255,255,255,.32)",
+          }}/>
+          {[0,1,2].map(i => (
+            <div key={i} style={{
+              position:"absolute", top:25+i*11, left:38+i*4, width:78-i*7, height:10,
+              borderRadius:3, border:"1px solid rgba(255,255,255,.18)",
+              background:"rgba(255,255,255,.08)",
+            }}/>
+          ))}
+        </div>
+
+        {/* stem + keycap moving vertically, like the reference */}
+        <div style={{
+          position:"absolute", left:"50%", top:15,
+          transform:`translateX(-50%) translateY(${stemDrop}px)`,
+          transition:"transform .035s linear", display:"flex", flexDirection:"column", alignItems:"center",
+        }}>
+          <div style={{
+            width:28, height:36, borderRadius:6,
+            background:"linear-gradient(90deg,#d8dcdf,#ffffff 45%,#a8adb2)",
+            border:"1px solid rgba(0,0,0,.22)",
+            boxShadow:"inset 0 2px 0 rgba(255,255,255,.8), 0 3px 8px rgba(0,0,0,.34)",
+          }}/>
+        </div>
+        <div style={{
+          position:"absolute", left:"50%", top:4,
+          transform:`translateX(-50%) translateY(${capDrop}px) rotateX(58deg) rotateZ(-28deg)`,
+          width:70, height:54, borderRadius:8,
+          background:`linear-gradient(135deg,${pressed ? C.keyHv : "#fbfbfb"},${pressed ? C.accent : "#cfd5d9"})`,
+          clipPath:"polygon(14% 0,86% 0,100% 100%,0 100%)",
+          border:"1px solid rgba(0,0,0,.22)",
+          boxShadow: pressed ? `0 5px 12px rgba(0,0,0,.38), 0 0 14px ${C.accent}33` : "0 10px 18px rgba(0,0,0,.36)",
+          transition:"transform .035s linear, background .12s ease, box-shadow .12s ease",
+          display:"flex", alignItems:"center", justifyContent:"center", color:"#263036",
+          fontSize:14, fontWeight:900, fontFamily:FONT,
+        }}>{label}</div>
+      </div>
+
+      <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"flex-end" }}>
+        <div style={{
+          height:136, width:34, borderRadius:18, background:C.track,
+          border:`1px solid ${C.bord}`, position:"relative", overflow:"hidden",
+          boxShadow:"inset 0 2px 8px rgba(0,0,0,.34)",
+        }}>
+          <div style={{
+            position:"absolute", left:3, right:3, bottom:3, height:`calc(${fillPct}% - 6px)`, minHeight: pressed ? 4 : 0,
+            borderRadius:15,
+            background:`linear-gradient(180deg,${C.accent},${C.green})`,
+            boxShadow: pressed ? `0 0 12px ${C.green}55` : "none",
+            transition:"height .035s linear, box-shadow .12s ease",
+          }}/>
+          <div style={{
+            position:"absolute", left:0, right:0, bottom:`${apNorm*100}%`, height:2,
+            background:C.red, boxShadow:`0 0 7px ${C.red}`,
+          }}/>
+          {[0,1,2,3,4].map(mm => (
+            <div key={mm} style={{
+              position:"absolute", left:4, right:4, bottom:`${(mm/4)*100}%`, height:1,
+              background:"rgba(255,255,255,.18)",
+            }}/>
+          ))}
+        </div>
+        <div style={{ height:136, display:"flex", flexDirection:"column", justifyContent:"space-between", fontFamily:MONO }}>
+          {[0,1,2,3,4].map(mm => (
+            <span key={mm} style={{ fontSize:9, color: Math.abs(travelMm-mm)<.22 ? C.accent : C.muted }}>{mm.toFixed(1)}</span>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ gridColumn:"1 / -1", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
+        <div style={{ fontSize:11, color:C.muted }}>
+          {pressed ? `${label} travel` : "Press a key to preview travel"}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontFamily:MONO, fontSize:12, fontWeight:800, color: actuated ? C.green : C.accent }}>
+            {travelMm.toFixed(2)}mm
+          </span>
+          <span style={{ fontSize:10, color: actuated ? C.green : C.muted, fontWeight:800, letterSpacing:".06em" }}>
+            {actuated ? "ACTUATED" : `AP ${ap.toFixed(2)}mm`}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    QUICK SETTINGS CARDS
 ───────────────────────────────────────────────────────────────────────────── */
-function APCard({ ap, setAp, connected, dSend, selectedKeys, apByIdx, liftByIdx }) {
+function APCard({ ap, setAp, connected, dSend, selectedKeys, apByIdx, liftByIdx, depths }) {
   const selArr = [...selectedKeys];
   const handleChange = v => {
     setAp(v);
@@ -664,8 +903,9 @@ function APCard({ ap, setAp, connected, dSend, selectedKeys, apByIdx, liftByIdx 
           VISUAL FEEDBACK
         </div>
         <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>
-          Press a key to test the actuation point.
+          Live depth shows here when HID telemetry is on. In Demo, press any key to animate the switch to its configured actuation depth.
         </div>
+        <KeyTravelPreview depths={depths || {}} selectedKeys={selectedKeys} ap={ap}/>
       </div>
       <SelectedKeyDetails selectedKeys={selectedKeys} mode="ap" apByIdx={apByIdx} liftByIdx={liftByIdx}/>
     </div>
@@ -1093,6 +1333,116 @@ const NAV = [
 const PNAMES = ["Quick Settings","Profile 2","CS:GO","Valorant"];
 const PCOLORS = ["#FFD45C","#a78bfa","#f97316","#38bdf8"];
 
+
+const DEVICE_OPTIONS = [
+  { id:"fun60", name:"FUN60 Ultra TMR", tag:"ANSI", demo:false, img:"⌨" },
+  { id:"demo60", name:"Demo FUN60 60HE", tag:"DEMO", demo:true, img:"▥" },
+  { id:"woot60", name:"Wooting 60HE v2", tag:"DEMO", demo:true, img:"▤" },
+];
+
+function DeviceThumb({ device, active, compact=false }) {
+  return (
+    <div style={{
+      width: compact ? 38 : 52, height: compact ? 30 : 38, borderRadius:7,
+      background:`linear-gradient(135deg, ${C.over}, ${C.nav})`,
+      border:`1px solid ${active ? C.accent : C.bord}`,
+      boxShadow: active ? `0 0 14px ${C.accent}33` : "inset 0 1px 0 rgba(255,255,255,.04)",
+      display:"flex", alignItems:"center", justifyContent:"center",
+      color: active ? C.accent : C.muted, fontSize: compact ? 14 : 18,
+      transition:"border-color .18s, box-shadow .18s, color .18s, transform .18s",
+    }}>{device.img}</div>
+  );
+}
+
+function DevicePicker({ open, setOpen, activeDevice, setActiveDevice, setDemo }) {
+  const current = DEVICE_OPTIONS.find(d => d.id === activeDevice) || DEVICE_OPTIONS[0];
+  return (
+    <div style={{ position:"relative" }}>
+      <button onClick={()=>setOpen(!open)} style={{
+        width:"100%", display:"flex", alignItems:"center", gap:10, padding:8,
+        borderRadius:8, background:C.surf, border:`1px solid ${open?C.bordHv:C.bord}`,
+        color:C.txt, cursor:"pointer", fontFamily:FONT, textAlign:"left",
+        boxShadow: open ? `0 8px 24px rgba(0,0,0,.22)` : "none",
+        transition:"border-color .16s, box-shadow .16s, background .16s",
+      }}>
+        <DeviceThumb device={current} active compact />
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:9, color:C.muted }}>My devices</div>
+          <div style={{ fontSize:12, color:C.txt, fontWeight:800, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{current.name}</div>
+        </div>
+        <span style={{ color:C.muted, transform:open?"rotate(180deg)":"rotate(0deg)", transition:"transform .18s" }}>⌄</span>
+      </button>
+
+      {open && <div style={{
+        position:"absolute", left:0, right:-12, top:"calc(100% + 8px)", zIndex:20,
+        background:C.over, border:`1px solid ${C.bordHv}`, borderRadius:10,
+        padding:8, display:"flex", flexDirection:"column", gap:7,
+        boxShadow:"0 18px 50px rgba(0,0,0,.38)",
+        animation:"deviceMenuIn .18s cubic-bezier(.22,1,.36,1)",
+      }}>
+        {DEVICE_OPTIONS.map(d => {
+          const active = d.id === activeDevice;
+          return (
+            <button key={d.id} onClick={()=>{ setActiveDevice(d.id); setDemo(d.demo); setOpen(false); }} style={{
+              display:"flex", alignItems:"center", gap:10, width:"100%", padding:8,
+              borderRadius:8, border:`1px solid ${active?C.accent:"transparent"}`,
+              background:active?C.activeBg:C.surf, color:C.txt, cursor:"pointer",
+              fontFamily:FONT, textAlign:"left", transition:"transform .14s, border-color .14s, background .14s",
+            }} onMouseEnter={e=>{e.currentTarget.style.transform="translateX(2px)"}} onMouseLeave={e=>{e.currentTarget.style.transform="translateX(0)"}}>
+              <DeviceThumb device={d} active={active} />
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:12, fontWeight:800 }}>{d.name}</div>
+                <div style={{ fontSize:10, color:C.muted }}>{d.tag}</div>
+              </div>
+              {active && <span style={{ color:C.accent, fontWeight:900 }}>✓</span>}
+            </button>
+          );
+        })}
+      </div>}
+    </div>
+  );
+}
+
+function IconRailButton({ item, active, onClick }) {
+  return (
+    <button onClick={onClick} title={item.tip} style={{
+      width:42, height:42, borderRadius:10, border:"none", cursor:"pointer",
+      color: active ? C.txt : C.muted,
+      background: active ? C.activeBg : "transparent",
+      display:"flex", alignItems:"center", justifyContent:"center",
+      position:"relative", transition:"background .18s, color .18s, transform .18s",
+    }} onMouseEnter={e=>{e.currentTarget.style.transform="translateX(2px)"}} onMouseLeave={e=>{e.currentTarget.style.transform="translateX(0)"}}>
+      {active && <div style={{
+        position:"absolute", left:2, width:3, height:22, borderRadius:3,
+        background:C.accent, boxShadow:`0 0 10px ${C.accent}aa`,
+        animation:"railSelect .2s cubic-bezier(.34,1.56,.64,1)",
+      }}/>} 
+      <span style={{ transform:active?"scale(1.08)":"scale(1)", transition:"transform .18s" }}>{item.icon}</span>
+    </button>
+  );
+}
+
+function SidebarNavItem({ icon, label, active, badge, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      display:"flex", alignItems:"center", gap:10, width:"calc(100% - 16px)", margin:"2px 8px",
+      padding:"9px 10px", borderRadius:8, border:`1px solid ${active?C.bordHv:"transparent"}`,
+      background: active ? C.activeBg : "transparent", cursor:"pointer",
+      fontFamily:FONT, fontSize:13, color: active ? C.txt : C.muted, fontWeight: active ? 800 : 600,
+      textAlign:"left", position:"relative", overflow:"hidden",
+      transition:"background .18s, color .18s, border-color .18s, transform .18s",
+    }} onMouseEnter={e=>{e.currentTarget.style.transform="translateX(2px)"}} onMouseLeave={e=>{e.currentTarget.style.transform="translateX(0)"}}>
+      {active && <div style={{
+        position:"absolute", left:0, top:6, bottom:6, width:3, borderRadius:3,
+        background:C.accent, boxShadow:`0 0 10px ${C.accent}99`, animation:"railSelect .2s cubic-bezier(.34,1.56,.64,1)",
+      }}/>} 
+      <span style={{ opacity: active ? 1 : .65, color: active ? C.accent : "currentColor", display:"flex" }}>{icon}</span>
+      <span style={{ flex:1 }}>{label}</span>
+      {badge && <ChipBadge label={badge} color={C.green}/>} 
+    </button>
+  );
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    MAIN APP
 ───────────────────────────────────────────────────────────────────────────── */
@@ -1103,6 +1453,8 @@ export default function App() {
   const [selKeys, setSelKeys]   = useState(new Set());
   const [depths,  setDepths]    = useState({});
   const [demo,    setDemo]      = useState(false);
+  const [activeDevice, setActiveDevice] = useState("fun60");
+  const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
 
   // Hardware state — defaults match factory firmware
   const [ap,       setAp]       = useState(2.00);
@@ -1149,12 +1501,26 @@ export default function App() {
       if (s.mag[MAG.LIFT])     setLiftByIdx(s.mag[MAG.LIFT]);
       if (s.mag[MAG.RT_PRESS]) { setRtPressByIdx(s.mag[MAG.RT_PRESS]); setSens(cmm(s.mag[MAG.RT_PRESS][0])); }
       if (s.mag[MAG.RT_LIFT])  setRtLiftByIdx(s.mag[MAG.RT_LIFT]);
-      if (s.mag[MAG.MODE])     { setModeByIdx(s.mag[MAG.MODE]);     setRtOn((s.mag[MAG.MODE][0] & RT_BIT) !== 0); }
+      if (s.mag[MAG.MODE])     { setModeByIdx(s.mag[MAG.MODE]);     setRtOn(s.mag[MAG.MODE][0] === MODE.RAPID_TRIGGER); }
       if (s.mag[MAG.SNAPTAP_EN]) setSnaptapByIdx(s.mag[MAG.SNAPTAP_EN]);
     }
   }, []);
 
-  const { hidOK, status, info, err, connect, disconnect, send, dSend } = useKeyboard({ onSettings });
+
+
+  const onTelemetry = useCallback(t => {
+    if (!t || !t.keyId) return;
+    // Real HID travel wins over demo animation when it is available.
+    // Each 0x05/0x1B packet updates one key, so merge instead of replacing.
+    setDepths(prev => {
+      const next = { ...prev };
+      if (t.normalized <= 0.01) delete next[t.keyId];
+      else next[t.keyId] = t.normalized;
+      return next;
+    });
+  }, []);
+
+  const { hidOK, status, info, err, telemetry, telemetryFmt, connect, disconnect, send, dSend, openTelemetry } = useKeyboard({ onSettings, onTelemetry });
   const connected = status === "connected";
 
   // Demo animation: simulated key travel driven by physical or pointer presses.
@@ -1169,11 +1535,11 @@ export default function App() {
   }, [demo]);
 
   useEffect(() => {
-    if (!demo) {
+    if (!demo || telemetry === "on") {
       cancelAnimationFrame(simFrameRef.current);
       simPressedRef.current.clear();
       simDepthRef.current = {};
-      setDepths({});
+      if (telemetry !== "on") setDepths({});
       return;
     }
 
@@ -1185,9 +1551,15 @@ export default function App() {
       const next = { ...simDepthRef.current };
       const ids = new Set([...Object.keys(next), ...simPressedRef.current]);
       ids.forEach(id => {
-        const target = simPressedRef.current.has(id) ? 1 : 0;
+        const k = ALL_KEYS.find(x => x.id === id);
+        const apMm = k?.magIdx >= 0 && apByIdx?.[k.magIdx] != null ? cmm(apByIdx[k.magIdx]) : ap;
+        // Normal browser keydown/keyup is digital, not analog. For demo mode,
+        // ramp to the configured actuation point instead of faking a full
+        // 4.00 mm bottom-out. This makes the visual feedback match what the
+        // setting actually means.
+        const target = simPressedRef.current.has(id) ? Math.max(0.03, Math.min(1, apMm / 4)) : 0;
         const current = next[id] || 0;
-        const speed = target > current ? 0.28 : 0.18;
+        const speed = target > current ? 0.22 : 0.20;
         const value = current + (target - current) * Math.min(1, speed * dt);
         if (target === 0 && value < 0.01) delete next[id];
         else next[id] = Math.max(0, Math.min(1, value));
@@ -1200,7 +1572,7 @@ export default function App() {
 
     simFrameRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(simFrameRef.current);
-  }, [demo]);
+  }, [demo, telemetry, apByIdx, ap]);
 
   useEffect(() => {
     if (!demo) return;
@@ -1251,51 +1623,28 @@ export default function App() {
       <div style={{ display:"flex", flex:1, minHeight:0 }}>
 
         {/* ── ICON SIDEBAR ────────────────────────────────────────── */}
-        <div style={{ width:52, flexShrink:0, background:C.nav,
+        <div style={{ width:64, flexShrink:0, background:C.nav,
           borderRight:`1px solid ${C.bord}`, display:"flex", flexDirection:"column",
-          alignItems:"center", paddingTop:10, gap:2 }}>
-          <div style={{ width:32, height:32, borderRadius:7, background:C.accent,
+          alignItems:"center", padding:"12px 0 10px", gap:4 }}>
+          <div style={{ width:42, height:42, borderRadius:12, background:`linear-gradient(135deg,${C.accent},${C.accent}cc)`,
             display:"flex", alignItems:"center", justifyContent:"center",
-            fontSize:15, fontWeight:900, color:C.atxt, marginBottom:14, letterSpacing:"-1px" }}>W</div>
-          {NAV.map(n => (
-            <button key={n.id} onClick={()=>setSection(n.id)} title={n.tip} style={{
-              width:38, height:38, borderRadius:6, background:"transparent", border:"none",
-              cursor:"pointer", color: section===n.id?C.accent:C.muted,
-              display:"flex", alignItems:"center", justifyContent:"center",
-              borderLeft:`2px solid ${section===n.id?C.accent:"transparent"}`,
-              transition:"color .12s",
-            }}>{n.icon}</button>
-          ))}
+            fontSize:17, fontWeight:900, color:C.atxt, marginBottom:12, letterSpacing:"-1px",
+            boxShadow:`0 10px 24px ${C.accent}22, inset 0 1px 0 rgba(255,255,255,.28)` }}>F</div>
+          {NAV.map(n => <IconRailButton key={n.id} item={n} active={section===n.id} onClick={()=>setSection(n.id)}/>)}
           <div style={{ flex:1 }}/>
-          <button onClick={() => setThemeName(isLight ? "dark" : "light")}
-            title={isLight ? "Switch to dark mode" : "Switch to light mode"}
-            aria-label={isLight ? "Switch to dark mode" : "Switch to light mode"}
-            style={{ width:38,height:38,borderRadius:6,background:isLight?C.activeBg:"transparent",
-              border:"none",cursor:"pointer",color:isLight?C.accent:C.muted,
-              display:"flex",alignItems:"center",justifyContent:"center",
-              marginBottom:0 }}>{isLight ? IC.moon : IC.sun}</button>
-          <button title="Help" aria-label="Help" style={{ width:38,height:38,borderRadius:6,background:"transparent",
-            border:"none",cursor:"pointer",color:C.muted,
-            display:"flex",alignItems:"center",justifyContent:"center",
-            marginBottom:8 }}>{IC.help}</button>
+          <IconRailButton item={{icon:isLight ? IC.moon : IC.sun, tip:isLight ? "Switch to dark mode" : "Switch to light mode"}}
+            active={false} onClick={() => setThemeName(isLight ? "dark" : "light")}/>
+          <IconRailButton item={{icon:IC.help, tip:"Help"}} active={false} onClick={()=>{}}/>
         </div>
 
         {/* ── TEXT SIDEBAR ────────────────────────────────────────── */}
-        <div style={{ width:210, flexShrink:0, background:C.panel,
-          borderRight:`1px solid ${C.bord}`, display:"flex", flexDirection:"column", overflow:"hidden" }}>
-          <div style={{ padding:"14px 14px 8px", borderBottom:`1px solid ${C.bord}` }}>
-            <div style={{ fontSize:10, fontWeight:700, color:C.muted, letterSpacing:".06em",
-              textTransform:"uppercase", marginBottom:8 }}>Keyboard Configuration</div>
-            <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px",
-              borderRadius:6, background:C.surf, border:`1px solid ${C.bord}`, cursor:"pointer" }}>
-              <div style={{ width:28,height:20,borderRadius:3,background:C.bord,flexShrink:0,
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.muted }}>⌨</div>
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:9, color:C.muted }}>My devices</div>
-                <div style={{ fontSize:11, color:C.txt, fontWeight:600 }}>FUN60 Ultra TMR</div>
-              </div>
-              <span style={{ fontSize:10, color:C.muted }}>▾</span>
-            </div>
+        <div style={{ width:250, flexShrink:0, background:C.panel,
+          borderRight:`1px solid ${C.bord}`, display:"flex", flexDirection:"column", overflow:"visible" }}>
+          <div style={{ padding:"14px 14px 10px", borderBottom:`1px solid ${C.bord}`, position:"relative" }}>
+            <div style={{ fontSize:10, fontWeight:800, color:C.muted, letterSpacing:".08em",
+              textTransform:"uppercase", marginBottom:9 }}>Keyboard Configuration</div>
+            <DevicePicker open={deviceMenuOpen} setOpen={setDeviceMenuOpen}
+              activeDevice={activeDevice} setActiveDevice={setActiveDevice} setDemo={setDemo}/>
           </div>
 
           <div style={{ padding:"10px 14px 4px" }}>
@@ -1321,11 +1670,11 @@ export default function App() {
               Configuration
             </div>
           </div>
-          <NavItem icon="◎" label="Actuation Point" active={section==="ap"} onClick={()=>setSection("ap")}/>
-          <NavItem icon="⚡" label="Rapid Trigger"  active={section==="rt"} onClick={()=>setSection("rt")}/>
-          <NavItem icon="◉" label="RGB Settings"   active={section==="rgb"} onClick={()=>setSection("rgb")}/>
-          <NavItem icon="⇄" label="Remap"          active={section==="remap"} onClick={()=>setSection("remap")}/>
-          <NavItem icon="⊟" label="Advanced Keys"  active={section==="advanced"} onClick={()=>setSection("advanced")} badge="DKS"/>
+          <SidebarNavItem icon={IC.tgt} label="Actuation Point" active={section==="ap"} onClick={()=>setSection("ap")}/>
+          <SidebarNavItem icon={IC.bolt} label="Rapid Trigger"  active={section==="rt"} onClick={()=>setSection("rt")}/>
+          <SidebarNavItem icon={IC.rgb} label="RGB Settings"   active={section==="rgb"} onClick={()=>setSection("rgb")}/>
+          <SidebarNavItem icon={IC.rmp} label="Remap"          active={section==="remap"} onClick={()=>setSection("remap")}/>
+          <SidebarNavItem icon={IC.adv} label="Advanced Keys"  active={section==="advanced"} onClick={()=>setSection("advanced")} badge="DKS"/>
 
           <div style={{ flex:1 }}/>
           <div style={{ padding:"8px 14px", fontSize:9, color:C.bord, borderTop:`1px solid ${C.bord}` }}>
@@ -1385,7 +1734,8 @@ export default function App() {
 
             {/* connection banner */}
             <ConnectBanner hidOK={hidOK} status={status} info={info} err={err}
-              onConnect={connect} onDisconnect={disconnect}/>
+              telemetry={telemetry} telemetryFmt={telemetryFmt}
+              onConnect={connect} onDisconnect={disconnect} onTelemetryConnect={openTelemetry}/>
 
             {/* keyboard */}
             <KeyboardViz keyDepths={depths} selectedKeys={selKeys}
@@ -1427,7 +1777,7 @@ export default function App() {
             {section==="quick" && (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:12 }}>
                 {[
-                  <APCard   ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx}/>,
+                  <APCard   ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx} depths={depths}/>,
                   <RTCard   rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}
                             split={split} setSplit={setSplit} press={press} setPress={setPress}
                             rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
@@ -1443,7 +1793,7 @@ export default function App() {
             {/* other panels */}
             {section !== "quick" && (
               <div style={{ background:C.surf, borderRadius:8, border:`1px solid ${C.bord}`, padding:20 }}>
-                {section==="ap"       && <APCard ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx}/>}
+                {section==="ap"       && <APCard ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx} depths={depths}/>}
                 {section==="rt"       && <RTCard rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}
                                            split={split} setSplit={setSplit} press={press} setPress={setPress}
                                            rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
@@ -1467,6 +1817,8 @@ export default function App() {
         @keyframes popIn{0%{transform:scale(0);opacity:0}100%{transform:scale(1);opacity:1}}
         @keyframes fadeSlideUp{0%{opacity:0;transform:translateY(4px)}100%{opacity:1;transform:translateY(0)}}
         @keyframes fadeIn{0%{opacity:0}100%{opacity:1}}
+        @keyframes deviceMenuIn{0%{opacity:0;transform:translateY(-6px) scale(.98)}100%{opacity:1;transform:translateY(0) scale(1)}}
+        @keyframes railSelect{0%{transform:scaleY(.35);opacity:.2}100%{transform:scaleY(1);opacity:1}}
         ::-webkit-scrollbar{width:5px}
         ::-webkit-scrollbar-track{background:${C.bg}}
         ::-webkit-scrollbar-thumb{background:${C.bord};border-radius:3px}
