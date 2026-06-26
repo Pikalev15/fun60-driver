@@ -1500,8 +1500,14 @@ const NAV = [
   {id:"advanced",icon:IC.adv,  tip:"Advanced Keys"},
 ];
 
-const PNAMES = ["Quick Settings","Profile 2","CS:GO","Valorant"];
-const PCOLORS = ["#FFD45C","#a78bfa","#f97316","#38bdf8"];
+const PROFILE_PRESETS = [
+  { name:"Typing Profile", badge:"O", fn:"Fn 1", color:"#2454ff", icon:"▣", onboard:true, isDefault:true },
+  { name:"Rapid Profile", badge:"P", fn:"Fn 1", color:"#ef4444", icon:"▦", onboard:true, isDefault:false },
+  { name:"Gaming Profile", badge:"G", fn:"Fn 2", color:"#22c55e", icon:"▣", onboard:true, isDefault:false },
+  { name:"Coding Profile", badge:"C", fn:"Fn 3", color:"#a855f7", icon:"▦", onboard:true, isDefault:false },
+];
+const PNAMES = PROFILE_PRESETS.map(p => p.name);
+const PCOLORS = PROFILE_PRESETS.map(p => p.color);
 
 
 const DEVICE_OPTIONS = [
@@ -1573,6 +1579,167 @@ function DevicePicker({ open, setOpen, activeDevice, setActiveDevice, setDemo })
   );
 }
 
+
+function ProfileIcon({ profile, size=48 }) {
+  return (
+    <div style={{
+      width:size, height:size, borderRadius:"50%",
+      border:`3px solid ${profile.color}`,
+      boxShadow:`0 0 18px ${profile.color}88`,
+      background: profile.color === "#ef4444"
+        ? "repeating-linear-gradient(45deg,#d7f7e8 0 7px,#ef4444 7px 11px,#d7f7e8 11px 18px)"
+        : `linear-gradient(135deg,${C.over},${C.nav})`,
+      color:C.txt, display:"flex", alignItems:"center", justifyContent:"center",
+      fontSize:Math.round(size*.45), fontWeight:900, flexShrink:0,
+    }}>{profile.icon}</div>
+  );
+}
+
+function ProfileActionMenu({ open, onClose, onEdit, onDuplicate, onToggleInactive, onboard }) {
+  if (!open) return null;
+  const items = [
+    { label:"Edit Profile", action:onEdit },
+    { label:"Duplicate", action:onDuplicate },
+    { label:onboard ? "Move to Inactive Profiles" : "Move to Onboard Profiles", action:onToggleInactive },
+    { label:"Share", action:()=>{} },
+  ];
+  return (
+    <>
+      <div onClick={onClose} style={{ position:"fixed", inset:0, zIndex:88 }}/>
+      <div style={{
+        position:"absolute", top:54, right:10, zIndex:90, minWidth:270,
+        background:C.over, border:`1px solid ${C.bordHv}`, borderRadius:9,
+        padding:"14px 0", boxShadow:"0 18px 55px rgba(0,0,0,.46)",
+        animation:"deviceMenuIn .14s cubic-bezier(.22,1,.36,1)",
+      }}>
+        {items.map(item => (
+          <button key={item.label} onClick={e=>{ e.stopPropagation(); onClose(); item.action?.(); }} style={{
+            width:"100%", border:"none", background:"transparent", color:C.txt,
+            fontFamily:FONT, fontSize:18, fontWeight:800, textAlign:"left",
+            padding:"16px 22px", cursor:"pointer", transition:"background .12s, color .12s",
+          }} onMouseEnter={e=>{e.currentTarget.style.background=C.bord; e.currentTarget.style.color=C.txt;}}
+             onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ProfileCard({ profile, index, active, onSelect, onDuplicate, onToggleInactive }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  return (
+    <button onClick={onSelect} style={{
+      position:"relative", minHeight:78, borderRadius:10, padding:"13px 16px",
+      background: active ? C.over : C.surf,
+      border:`1px solid ${active ? C.accent : C.bord}`,
+      color:C.txt, fontFamily:FONT, cursor:"pointer", textAlign:"left",
+      display:"flex", alignItems:"center", gap:16,
+      boxShadow: active ? `0 0 0 1px ${C.accent}22, inset 0 1px 0 rgba(255,255,255,.04)` : "inset 0 1px 0 rgba(255,255,255,.03)",
+      transition:"background .16s, border-color .16s, transform .16s, box-shadow .16s",
+    }} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)"}} onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)"}}>
+      <span style={{
+        position:"absolute", top:8, left:8, width:24, height:24, borderRadius:"50%",
+        background:C.bordHv, color:C.txt, display:"flex", alignItems:"center", justifyContent:"center",
+        fontSize:13, fontWeight:900,
+      }}>{index+1}</span>
+      <ProfileIcon profile={profile}/>
+      <div style={{ minWidth:0, flex:1, display:"flex", alignItems:"center", gap:10 }}>
+        <span style={{ fontSize:18, fontWeight:900, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{profile.name}</span>
+        <span style={{ padding:"3px 10px", borderRadius:12, background:C.bordHv, color:C.sub, fontSize:13, fontWeight:900 }}>{profile.fn}</span>
+        <span style={{ padding:"3px 10px", borderRadius:12, background:C.bordHv, color:C.sub, fontSize:13, fontWeight:900 }}>{profile.badge}</span>
+      </div>
+      {profile.isDefault && <span style={{ padding:"5px 10px", borderRadius:8, background:C.accent, color:C.atxt, fontSize:13, fontWeight:900 }}>DEFAULT</span>}
+      <button onClick={e=>{ e.stopPropagation(); setMenuOpen(v=>!v); }} style={{
+        width:38, height:42, borderRadius:8, border:"none", background:menuOpen?C.bordHv:"transparent",
+        color:menuOpen?C.accent:C.muted, fontSize:22, lineHeight:1, cursor:"pointer",
+        display:"flex", alignItems:"center", justifyContent:"center",
+      }}>⋮</button>
+      <ProfileActionMenu
+        open={menuOpen}
+        onClose={()=>setMenuOpen(false)}
+        onEdit={()=>{}}
+        onDuplicate={()=>onDuplicate?.(index)}
+        onToggleInactive={()=>onToggleInactive?.(index)}
+        onboard={profile.onboard}
+      />
+    </button>
+  );
+}
+
+function MyProfilesPanel({ profiles, activeProfile, onSelect, onNewProfile, onDuplicateProfile, onToggleInactive }) {
+  const inactive = profiles.filter(p => !p.onboard);
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:22, padding:"4px 0 24px", animation:"fadeSlideUp .18s ease-out" }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:16 }}>
+        <h1 style={{ margin:0, fontSize:30, color:C.txt, letterSpacing:"-.02em" }}>My Profiles</h1>
+        <div style={{ display:"flex", gap:10 }}>
+          <button style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderRadius:8, border:"none", background:C.over, color:C.txt, fontFamily:FONT, fontSize:15, fontWeight:900, cursor:"pointer" }}>⇩ Import Profile</button>
+          <button onClick={onNewProfile} style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderRadius:8, border:"none", background:C.over, color:C.txt, fontFamily:FONT, fontSize:15, fontWeight:900, cursor:"pointer" }}>＋ New Profile</button>
+        </div>
+      </div>
+
+      <section style={{ background:C.panel, border:`1px solid ${C.bord}`, borderRadius:10, padding:18 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+          <h2 style={{ margin:0, fontSize:20, color:C.txt }}>Onboard profiles</h2>
+          <span style={{ width:24, height:24, borderRadius:"50%", border:`2px solid ${C.muted}`, color:C.muted, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900 }}>?</span>
+          <span style={{ padding:"3px 8px", borderRadius:8, background:C.bordHv, color:C.txt, fontWeight:900 }}>{profiles.filter(p=>p.onboard).length} / 4</span>
+        </div>
+        <p style={{ margin:"0 0 18px", fontSize:18, color:C.sub }}>To load a profile onto your keyboard, drag and drop it into this section. To swap profiles, drag and drop them onto each other.</p>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(280px,1fr))", gap:16 }}>
+          {profiles.filter(p=>p.onboard).map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={i} active={activeProfile===i} onSelect={()=>onSelect(i)} onDuplicate={onDuplicateProfile} onToggleInactive={onToggleInactive}/>) }
+        </div>
+        <div style={{ marginTop:16, border:`2px dashed ${C.bord}`, borderRadius:9, height:86, display:"flex", alignItems:"center", justifyContent:"center", color:C.muted, fontSize:18, fontWeight:700 }}>Drag & Drop a Profile here</div>
+      </section>
+
+      <section style={{ background:C.panel, border:`1px solid ${C.bord}`, borderRadius:10, padding:18 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:18 }}>
+          <h2 style={{ margin:0, fontSize:20, color:C.txt }}>Inactive profiles</h2>
+          <span style={{ width:24, height:24, borderRadius:"50%", border:`2px solid ${C.muted}`, color:C.muted, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900 }}>?</span>
+        </div>
+        {inactive.length ? <div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(280px,1fr))", gap:16 }}>{inactive.map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={profiles.findIndex(p=>p===prof)} active={false} onSelect={()=>{}} onDuplicate={onDuplicateProfile} onToggleInactive={onToggleInactive}/>)}</div> :
+          <div style={{ border:`2px dashed ${C.bord}`, borderRadius:9, height:86, display:"flex", alignItems:"center", justifyContent:"center", color:C.muted, fontSize:18, fontWeight:700 }}>Drag & Drop a Profile here</div>}
+      </section>
+    </div>
+  );
+}
+
+function ProfileDropdown({ profiles, activeProfile, open, onToggle, onSelect, onNewProfile }) {
+  const current = profiles[activeProfile] || profiles[0];
+  return (
+    <div style={{ position:"relative", width:"min(760px,62vw)" }}>
+      <button onClick={onToggle} style={{
+        width:"100%", height:62, border:"none", borderRadius:7, overflow:"hidden",
+        background:C.surf, color:C.txt, fontFamily:FONT, cursor:"pointer",
+        display:"grid", gridTemplateColumns:"68px 1fr 54px", alignItems:"center",
+        boxShadow:"0 10px 25px rgba(0,0,0,.18)", textAlign:"left",
+      }}>
+        <div style={{ height:"100%", display:"flex", alignItems:"center", justifyContent:"center", background:`linear-gradient(135deg,${current.color}38,${C.surf})`, borderRight:`1px solid ${C.bord}` }}>
+          <ProfileIcon profile={current} size={42}/>
+        </div>
+        <div style={{ padding:"0 18px", fontSize:15, fontWeight:900 }}>{current.name}</div>
+        <div style={{ color:C.txt, textAlign:"center", fontSize:18, transform:open?"rotate(180deg)":"none", transition:"transform .16s" }}>⌃</div>
+      </button>
+      {open && <div style={{
+        position:"absolute", top:"calc(100% + 12px)", left:0, right:0, zIndex:50,
+        background:C.over, border:`1px solid ${C.bordHv}`, borderRadius:10, padding:18,
+        boxShadow:"0 24px 70px rgba(0,0,0,.46)", animation:"deviceMenuIn .18s cubic-bezier(.22,1,.36,1)",
+      }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 60px 160px", gap:10, marginBottom:16 }}>
+          <div style={{ height:48, borderRadius:7, background:C.nav, display:"flex", alignItems:"center", gap:12, padding:"0 14px", color:C.muted, fontSize:20 }}><span>⌕</span><span style={{ fontSize:20 }}>Search</span></div>
+          <button style={{ border:"none", borderRadius:7, background:C.bordHv, color:C.txt, fontSize:20, cursor:"pointer" }}>⇩</button>
+          <button onClick={onNewProfile} style={{ border:"none", borderRadius:7, background:C.bordHv, color:C.txt, fontFamily:FONT, fontSize:18, fontWeight:900, cursor:"pointer" }}>New Profile</button>
+        </div>
+        <div style={{ color:C.muted, fontWeight:900, fontSize:14, marginBottom:10, textTransform:"uppercase" }}>Onboard profiles</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {profiles.filter(p=>p.onboard).map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={i} active={activeProfile===i} onSelect={()=>{ onSelect(i); onToggle(false); }}/>) }
+        </div>
+      </div>}
+    </div>
+  );
+}
+
 function IconRailButton({ item, active, onClick }) {
   return (
     <button onClick={onClick} title={item.tip} style={{
@@ -1613,13 +1780,156 @@ function SidebarNavItem({ icon, label, active, badge, onClick }) {
   );
 }
 
+
+
+function SettingsCategoryItem({ icon, label, active, badge, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      width:"100%", display:"flex", alignItems:"center", gap:12,
+      padding:"12px 14px", borderRadius:8, border:"none",
+      background:active ? C.over : "transparent", color:active ? C.txt : C.sub,
+      fontFamily:FONT, fontSize:15, fontWeight:active ? 900 : 700,
+      cursor:"pointer", textAlign:"left", transition:"background .16s, color .16s, transform .16s",
+    }} onMouseEnter={e=>{e.currentTarget.style.transform="translateX(2px)"}} onMouseLeave={e=>{e.currentTarget.style.transform="translateX(0)"}}>
+      <span style={{ color:active ? C.accent : C.muted, display:"flex" }}>{icon}</span>
+      <span style={{ flex:1 }}>{label}</span>
+      {badge && <span style={{ background:C.accent, color:C.atxt, borderRadius:7, padding:"2px 7px", fontSize:11, fontWeight:900 }}>{badge}</span>}
+    </button>
+  );
+}
+
+function SettingsSidebar({ settingsCat, setSettingsCat, activeDevice }) {
+  const current = DEVICE_OPTIONS.find(d => d.id === activeDevice) || DEVICE_OPTIONS[0];
+  return (
+    <>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24 }}>
+        <div style={{ fontSize:15, fontWeight:900, color:C.txt }}>Settings</div>
+        <div style={{ color:C.muted, fontSize:14 }}>▣</div>
+      </div>
+      <div style={{ opacity:.48, marginBottom:28 }}>
+        <button style={{
+          width:"100%", display:"flex", alignItems:"center", gap:12, padding:12,
+          borderRadius:10, background:C.over, border:`1px solid ${C.bord}`,
+          color:C.txt, fontFamily:FONT, textAlign:"left", cursor:"default",
+        }}>
+          <DeviceThumb device={current} active={false}/>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:10, color:C.muted }}>Demo devices</div>
+            <div style={{ fontSize:14, color:C.txt, fontWeight:900, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>Wooting 60HE...</div>
+          </div>
+          <span style={{ color:C.muted }}>⌄</span>
+        </button>
+      </div>
+
+      <div style={{ fontSize:11, fontWeight:900, color:C.muted, margin:"0 14px 14px", letterSpacing:".02em" }}>Keyboard Settings</div>
+      <SettingsCategoryItem icon={IC.kb} label="General Settings" active={settingsCat==="general"} onClick={()=>setSettingsCat("general")}/>
+      <SettingsCategoryItem icon={IC.adv} label="Switch Selector" badge="NEW" active={settingsCat==="switch"} onClick={()=>setSettingsCat("switch")}/>
+
+      <div style={{ fontSize:11, fontWeight:900, color:C.muted, margin:"30px 14px 14px", letterSpacing:".02em" }}>Updates</div>
+      <SettingsCategoryItem icon={IC.rmp} label="Updates" active={settingsCat==="updates"} onClick={()=>setSettingsCat("updates")}/>
+
+      <div style={{ fontSize:11, fontWeight:900, color:C.muted, margin:"30px 14px 14px", letterSpacing:".02em" }}>Appearance Settings</div>
+      <SettingsCategoryItem icon={IC.rgb} label="Interface" active={settingsCat==="interface"} onClick={()=>setSettingsCat("interface")}/>
+
+      <div style={{ flex:1 }}/>
+      <div style={{ textAlign:"center", color:C.muted, fontSize:13, fontWeight:700, paddingBottom:4 }}>Fun60 Ultra tmr ultil v0.2.1</div>
+    </>
+  );
+}
+
+function SettingsCard({ children, style }) {
+  return <div style={{ background:C.surf, border:`1px solid ${C.bord}`, borderRadius:8, padding:22, ...style }}>{children}</div>;
+}
+
+function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName }) {
+  const appearance = themeName === "light" ? "Light Theme" : "Dark Theme";
+  return (
+    <div style={{ width:"min(760px,100%)", margin:"0 auto", padding:"26px 0 80px", animation:"fadeSlideUp .18s ease-out" }}>
+      {settingsCat === "interface" && <>
+        <h1 style={{ margin:"0 0 26px", fontSize:26, color:C.txt, letterSpacing:"-.02em" }}>Interface</h1>
+        <div style={{ display:"flex", flexDirection:"column", gap:30 }}>
+          <section>
+            <h2 style={{ margin:"0 0 18px", color:C.sub, fontSize:20 }}>Language</h2>
+            <button style={{ width:"100%", height:54, border:"none", borderRadius:7, background:C.over, color:C.txt, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 20px", fontFamily:FONT, fontSize:15, fontWeight:800, cursor:"pointer" }}>
+              English <span style={{ color:C.muted }}>⌄</span>
+            </button>
+            <SettingsCard style={{ marginTop:20, display:"flex", gap:14, alignItems:"flex-start", background:C.over }}>
+              <div style={{ width:32, height:32, borderRadius:"50%", background:"rgba(59,130,246,.18)", color:C.blue, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900, flexShrink:0 }}>i</div>
+              <div>
+                <div style={{ fontWeight:900, color:C.txt, marginBottom:5 }}>These translations are made by ChatGPT for now.</div>
+                <div style={{ color:C.sub, lineHeight:1.45 }}>Help improve translations, spot errors, or add your language in the github. <span style={{ color:C.accent, fontWeight:900 }}>Learn more</span></div>
+              </div>
+            </SettingsCard>
+          </section>
+
+          <div style={{ height:1, background:C.bord }}/>
+
+          <section>
+            <h2 style={{ margin:"0 0 20px", color:C.sub, fontSize:20 }}>Appearance</h2>
+            <div style={{ display:"flex", gap:14, flexWrap:"wrap" }}>
+              {[
+                ["light", "☀", "Light Theme", false],
+                ["dark", "☾", "Dark Theme", false],
+                ["sync", "ↄ", "Sync with PC", true],
+              ].map(([id,icon,label,disabled]) => {
+                const active = id === themeName;
+                return <button key={id} disabled={disabled} onClick={()=>!disabled && setThemeName(id)} style={{
+                  width:124, height:96, borderRadius:8, border:`1px solid ${active?C.bordHv:C.bord}`,
+                  background:active ? C.over : C.surf, color:disabled?C.muted:C.txt,
+                  opacity:disabled?.55:1, cursor:disabled?"default":"pointer", fontFamily:FONT,
+                  display:"flex", flexDirection:"column", justifyContent:"center", alignItems:"center", gap:10,
+                  position:"relative",
+                }}>
+                  <span style={{ fontSize:28, color:active?C.accent:C.muted }}>{icon}</span>
+                  <span style={{ fontSize:15, fontWeight:800 }}>{label}</span>
+                  {disabled && <span style={{ position:"absolute", bottom:-18, background:C.accent, color:C.atxt, borderRadius:7, padding:"2px 7px", fontSize:10, fontWeight:900 }}>COMING SOON</span>}
+                </button>
+              })}
+            </div>
+          </section>
+        </div>
+      </>}
+
+      {settingsCat === "general" && <>
+        <h1 style={{ margin:"0 0 26px", fontSize:26, color:C.txt }}>General Settings</h1>
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <SettingsCard><div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Keyboard name</div><div style={{ color:C.muted, marginBottom:14 }}>This only changes the name inside this web driver.</div><input defaultValue="FUN60 Ultra TMR" style={{ width:"100%", height:46, borderRadius:7, border:`1px solid ${C.bord}`, background:C.over, color:C.txt, padding:"0 14px", fontFamily:FONT, fontWeight:800 }}/></SettingsCard>
+          <SettingsCard><div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Factory reset</div><div style={{ color:C.muted, marginBottom:14 }}>Placeholder UI for now. Actual reset command is not wired.</div><button style={{ padding:"10px 14px", borderRadius:7, border:`1px solid ${C.red}`, background:"transparent", color:C.red, fontFamily:FONT, fontWeight:900 }}>Reset keyboard settings</button></SettingsCard>
+        </div>
+      </>}
+
+      {settingsCat === "switch" && <>
+        <h1 style={{ margin:"0 0 26px", fontSize:26, color:C.txt }}>Switch Selector</h1>
+        <SettingsCard><div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Magnetic switch type</div><div style={{ color:C.muted, marginBottom:18 }}>Choose a visual preset. This does not flash firmware.</div><div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(180px,1fr))", gap:12 }}>{["TMR magnetic", "Hall effect", "Custom curve", "Factory default"].map((x,i)=><button key={x} style={{ padding:"16px", borderRadius:8, border:`1px solid ${i===0?C.accent:C.bord}`, background:i===0?C.activeBg:C.over, color:i===0?C.accent:C.txt, fontFamily:FONT, fontWeight:900, cursor:"pointer" }}>{x}</button>)}</div></SettingsCard>
+      </>}
+
+      {settingsCat === "updates" && <>
+        <h1 style={{ margin:"0 0 26px", fontSize:26, color:C.txt }}>Updates</h1>
+        <SettingsCard><div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Driver version</div><div style={{ color:C.muted, marginBottom:18 }}>Local development build using the current React prototype.</div><div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}><span style={{ fontFamily:MONO, color:C.sub }}>v0.1.0-dev</span><button style={{ padding:"10px 14px", borderRadius:7, border:"none", background:C.accent, color:C.atxt, fontFamily:FONT, fontWeight:900 }}>Check for updates</button></div></SettingsCard>
+      </>}
+    </div>
+  );
+}
+
+function HelpPanel() {
+  return (
+    <div style={{ width:"min(760px,100%)", margin:"0 auto", padding:"40px 0 80px" }}>
+      <h1 style={{ margin:"0 0 20px", fontSize:30 }}>Help</h1>
+      <SettingsCard><div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Keyboard not connecting?</div><div style={{ color:C.muted, lineHeight:1.5 }}>Use Chrome or Edge, close the official driver, then reconnect the keyboard. Live HID may ask for a second device permission.</div></SettingsCard>
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    MAIN APP
 ───────────────────────────────────────────────────────────────────────────── */
 export default function App() {
   const [themeName, setThemeName] = useState("dark");
   const [section, setSection]   = useState("quick");
+  const [settingsCat, setSettingsCat] = useState("interface");
   const [profile, setProfile]   = useState(0);
+  const [profiles, setProfiles] = useState(PROFILE_PRESETS);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [selKeys, setSelKeys]   = useState(new Set());
   const [depths,  setDepths]    = useState({});
   const [demo,    setDemo]      = useState(false);
@@ -1794,223 +2104,269 @@ export default function App() {
 
   const handleProfileChange = i => {
     setProfile(i);
+    setProfileMenuOpen(false);
     if (connected) dSend("profile", CMD.setProfile(i), 0);
   };
 
+  const addProfile = () => {
+    setProfiles(prev => [...prev, {
+      name: `Profile ${prev.length + 1}`,
+      badge: String(prev.length + 1), fn: "Fn 1", color: "#38bdf8", icon: "▣",
+      onboard: prev.filter(p => p.onboard).length < 4,
+      isDefault: false,
+    }]);
+    setSection("profiles");
+  };
+
+  const duplicateProfile = idx => {
+    setProfiles(prev => {
+      const src = prev[idx];
+      if (!src) return prev;
+      return [...prev, { ...src, name: `${src.name} Copy`, isDefault:false, onboard: prev.filter(p => p.onboard).length < 4 }];
+    });
+    setSection("profiles");
+  };
+
+  const toggleProfileInactive = idx => {
+    setProfiles(prev => prev.map((p, i) => i === idx ? { ...p, onboard: !p.onboard, isDefault: p.isDefault && p.onboard ? false : p.isDefault } : p));
+    if (profile === idx) setProfile(0);
+  };
+
   C = THEMES[themeName];
-  const pColor = PCOLORS[profile];
+  const pColor = profiles[profile]?.color || PCOLORS[profile] || C.accent;
   const isLight = themeName === "light";
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100vh",
-      background:C.bg, color:C.txt, fontFamily:FONT, fontSize:13, overflow:"hidden" }}>
+    <div style={{ height:"100vh", background:C.bg, color:C.txt, fontFamily:FONT, fontSize:13, overflow:"hidden" }}>
       <link rel="preconnect" href="https://fonts.googleapis.com"/>
       <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
 
-      <div style={{ display:"flex", flex:1, minHeight:0 }}>
-
-        {/* ── ICON SIDEBAR ────────────────────────────────────────── */}
-        <div style={{ width:64, flexShrink:0, background:C.nav,
-          borderRight:`1px solid ${C.bord}`, display:"flex", flexDirection:"column",
-          alignItems:"center", padding:"12px 0 10px", gap:4 }}>
-          <div style={{ width:42, height:42, borderRadius:12, background:`linear-gradient(135deg,${C.accent},${C.accent}cc)`,
-            display:"flex", alignItems:"center", justifyContent:"center",
-            fontSize:17, fontWeight:900, color:C.atxt, marginBottom:12, letterSpacing:"-1px",
-            boxShadow:`0 10px 24px ${C.accent}22, inset 0 1px 0 rgba(255,255,255,.28)` }}>F</div>
-          {NAV.map(n => <IconRailButton key={n.id} item={n} active={section===n.id} onClick={()=>setSection(n.id)}/>)}
-          <div style={{ flex:1 }}/>
-          <IconRailButton item={{icon:isLight ? IC.moon : IC.sun, tip:isLight ? "Switch to dark mode" : "Switch to light mode"}}
-            active={false} onClick={() => setThemeName(isLight ? "dark" : "light")}/>
-          <IconRailButton item={{icon:IC.help, tip:"Help"}} active={false} onClick={()=>{}}/>
-        </div>
-
-        {/* ── TEXT SIDEBAR ────────────────────────────────────────── */}
-        <div style={{ width:250, flexShrink:0, background:C.panel,
-          borderRight:`1px solid ${C.bord}`, display:"flex", flexDirection:"column", overflow:"visible" }}>
-          <div style={{ padding:"14px 14px 10px", borderBottom:`1px solid ${C.bord}`, position:"relative" }}>
-            <div style={{ fontSize:10, fontWeight:800, color:C.muted, letterSpacing:".08em",
-              textTransform:"uppercase", marginBottom:9 }}>Keyboard Configuration</div>
-            <DevicePicker open={deviceMenuOpen} setOpen={setDeviceMenuOpen}
-              activeDevice={activeDevice} setActiveDevice={setActiveDevice} setDemo={setDemo}/>
-          </div>
-
-          <div style={{ padding:"10px 14px 4px" }}>
-            <div style={{ fontSize:10, fontWeight:700, color:C.muted, letterSpacing:".06em", textTransform:"uppercase", marginBottom:4 }}>Profiles</div>
-          </div>
-          {[0,1,2,3].map(i => (
-            <button key={i} onClick={()=>handleProfileChange(i)} style={{
-              display:"flex", alignItems:"center", gap:8, width:"100%", padding:"6px 14px",
-              background: profile===i&&section==="quick" ? C.activeBg : "transparent",
-              border:"none", borderLeft:`2px solid ${profile===i&&section==="quick"?C.accent:"transparent"}`,
-              cursor:"pointer", fontFamily:FONT, fontSize:12,
-              color: profile===i?C.txt:C.muted,
-            }}>
-              <div style={{ width:8,height:8,borderRadius:"50%",
-                background: i===profile?C.green:C.bord,
-                boxShadow: i===profile?`0 0 5px ${C.green}99`:"none" }}/>
-              {PNAMES[i]}
+      <div style={{ display:"grid", gridTemplateColumns:"64px 318px 1fr", height:"100%", minWidth:1100 }}>
+        {/* Wootility-style icon rail */}
+        <aside style={{
+          background:C.nav, borderRight:`1px solid ${C.bord}`,
+          display:"flex", flexDirection:"column", alignItems:"center",
+          padding:"10px 0", gap:9,
+        }}>
+          <div style={{
+            width:40, height:30, marginBottom:8, border:`3px solid ${C.txt}`,
+            color:C.txt, display:"flex", alignItems:"center", justifyContent:"center",
+            fontWeight:900, fontSize:18, boxShadow:"inset 0 -2px 0 rgba(255,255,255,.16)",
+          }}>▣</div>
+          {[
+            {id:"keyboard", icon:IC.kb, label:"Keyboard", go:()=>setSection("quick"), active:!["settings","help"].includes(section)},
+            {id:"settings", icon:IC.gear, label:"Settings", go:()=>{ setSection("settings"); setSettingsCat("interface"); }, active:section==="settings"},
+            {id:"help", icon:IC.help, label:"Help", go:()=>setSection("help"), active:section==="help"},
+          ].map(item => (
+            <button key={item.id} onClick={item.go} style={{
+              width:48, minHeight:54, borderRadius:6, border:"none",
+              background:item.active?C.over:"transparent", color:item.active?C.txt:C.muted,
+              cursor:"pointer", fontFamily:FONT, display:"flex", flexDirection:"column",
+              alignItems:"center", justifyContent:"center", gap:5, position:"relative",
+              transition:"background .16s, color .16s, transform .16s",
+            }} onMouseEnter={e=>{e.currentTarget.style.transform="translateX(2px)"}} onMouseLeave={e=>{e.currentTarget.style.transform="translateX(0)"}}>
+              <span style={{ color:item.active?C.accent:C.muted, display:"flex", transform:item.active?"scale(1.05)":"scale(1)", transition:"transform .16s" }}>{item.icon}</span>
+              <span style={{ fontSize:11, fontWeight:800, lineHeight:1 }}>{item.label}</span>
             </button>
           ))}
-
-          <div style={{ padding:"12px 14px 4px", marginTop:4, borderTop:`1px solid ${C.bord}` }}>
-            <div style={{ fontSize:10, fontWeight:700, color:C.muted, letterSpacing:".06em", textTransform:"uppercase" }}>
-              Configuration
-            </div>
-          </div>
-          <SidebarNavItem icon={IC.tgt} label="Actuation Point" active={section==="ap"} onClick={()=>setSection("ap")}/>
-          <SidebarNavItem icon={IC.bolt} label="Rapid Trigger"  active={section==="rt"} onClick={()=>setSection("rt")}/>
-          <SidebarNavItem icon={IC.rgb} label="RGB Settings"   active={section==="rgb"} onClick={()=>setSection("rgb")}/>
-          <SidebarNavItem icon={IC.rmp} label="Remap"          active={section==="remap"} onClick={()=>setSection("remap")}/>
-          <SidebarNavItem icon={IC.adv} label="Advanced Keys"  active={section==="advanced"} onClick={()=>setSection("advanced")} badge="DKS"/>
-
           <div style={{ flex:1 }}/>
-          <div style={{ padding:"8px 14px", fontSize:9, color:C.bord, borderTop:`1px solid ${C.bord}` }}>
-            Wootility v5.3.1 clone
-          </div>
-        </div>
+          <button onClick={() => setThemeName(isLight ? "dark" : "light")} style={{ width:38, height:38, borderRadius:8, border:"none", background:"transparent", color:C.muted, cursor:"pointer" }}>{isLight ? IC.moon : IC.sun}</button>
+        </aside>
 
-        {/* ── MAIN CONTENT ─────────────────────────────────────────── */}
-        <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
-          {/* topbar */}
-          <div style={{ height:52, flexShrink:0, background:C.panel,
-            borderBottom:`1px solid ${C.bord}`,
-            display:"flex", alignItems:"center", padding:"0 20px", gap:12 }}>
-            <div style={{ width:32,height:32,borderRadius:"50%",
-              background:`linear-gradient(135deg,${pColor},${pColor}99)`,
-              display:"flex",alignItems:"center",justifyContent:"center",
-              fontSize:14,fontWeight:900,color:C.atxt,boxShadow:`0 0 8px ${pColor}66` }}>
-              {PNAMES[profile][0]}
-            </div>
-            <div style={{ fontSize:14, fontWeight:700, color:C.txt }}>{PNAMES[profile]}</div>
-            <button style={{ padding:"4px 10px 4px 12px", border:`1px solid ${C.bord}`,
-              borderRadius:4, background:C.surf, color:C.sub, fontSize:11,
-              cursor:"pointer", fontFamily:FONT, display:"flex", alignItems:"center", gap:5 }}>
-              Mode <span style={{ color:C.muted }}>▾</span>
-            </button>
-            <div style={{ flex:1 }}/>
-
-            {/* demo */}
-            <button onClick={()=>setDemo(d=>!d)} style={{
-              padding:"4px 10px", border:`1px solid ${demo?C.accent:C.bord}`,
-              borderRadius:4, background:demo?C.activeBg:"transparent",
-              color:demo?C.accent:C.muted, fontSize:10, fontWeight:700,
-              cursor:"pointer", fontFamily:FONT, letterSpacing:".05em",
-            }}>{demo?"◉ DEMO":"○ DEMO"}</button>
-
-            {["↩","↪"].map((a,i) => (
-              <button key={i} style={{ width:30,height:30,borderRadius:4,
-                border:`1px solid ${C.bord}`,background:"transparent",
-                color:C.muted,cursor:"pointer",fontSize:15 }}>{a}</button>
-            ))}
-
-            <button onClick={() => connected ? dSend("save-profile", CMD.setProfile(profile), 0) : null}
-              style={{ display:"flex",alignItems:"center",gap:6,
-                padding:"6px 14px",borderRadius:4,
-                background: connected ? C.accent : C.disabledBg,
-                border:"none", color: connected ? C.atxt : C.disabledTxt,
-                fontSize:12,fontWeight:700,cursor:connected?"pointer":"default",
-                fontFamily:FONT,
-                boxShadow: connected ? `0 0 10px ${C.accent}55` : "none" }}>
-              🔒 Save to Keyboard
-            </button>
-          </div>
-
-          {/* scroll area */}
-          <div style={{ flex:1, overflow:"auto", padding:"18px 22px",
-            display:"flex", flexDirection:"column", gap:14 }}>
-
-            {/* connection banner */}
-            <ConnectBanner hidOK={hidOK} status={status} info={info} err={err}
-              telemetry={telemetry} telemetryFmt={telemetryFmt}
-              onConnect={connect} onDisconnect={disconnect} onTelemetryConnect={openTelemetry}/>
-
-            {/* keyboard */}
-            <KeyboardViz keyDepths={depths} selectedKeys={selKeys}
-              onKeyClick={toggleKey}
-              onSimPress={id => setSimKey(id, true)}
-              onSimRelease={id => setSimKey(id, false)}
-              section={section} apByIdx={apByIdx} globalAp={ap}
-              rtPressByIdx={rtPressByIdx} globalSens={sens}/>
-
-            {/* select all / discard — sits with the section title, matching reference */}
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:-4 }}>
-              <span style={{ fontSize:10, color:C.muted, letterSpacing:".04em" }}>
-                {selKeys.size === 0
-                  ? (section==="ap"||section==="rt"||section==="remap"||section==="advanced"
-                      ? "SELECT ONE OR MORE KEYS TO CONFIGURE PER-KEY SETTINGS" : "")
-                  : `${selKeys.size} KEY${selKeys.size>1?"S":""} SELECTED`}
-              </span>
-              <div style={{ display:"flex", gap:6 }}>
-                <button onClick={()=>setSelKeys(new Set(ALL_KEYS.map(k=>k.id)))} style={{
-                  padding:"4px 11px", borderRadius:4, border:`1px solid ${C.bord}`,
-                  background:"transparent", color:C.sub, fontSize:11, cursor:"pointer", fontFamily:FONT,
-                  transition:"border-color .15s, color .15s",
-                }}>Select all keys</button>
-                <button onClick={()=>setSelKeys(new Set())} disabled={selKeys.size===0} style={{
-                  padding:"4px 11px", borderRadius:4, border:`1px solid ${C.bord}`,
-                  background:"transparent", color: selKeys.size===0?C.disabledTxt:C.sub, fontSize:11,
-                  cursor: selKeys.size===0?"default":"pointer", fontFamily:FONT,
-                  opacity: selKeys.size===0?.5:1, transition:"opacity .15s",
-                }}>Discard selection</button>
+        {/* left configuration column */}
+        <aside style={{ background:C.surf, borderRight:`1px solid ${C.bord}`, padding:20, display:"flex", flexDirection:"column", overflow:"visible" }}>
+          {section === "settings" ? (
+            <SettingsSidebar settingsCat={settingsCat} setSettingsCat={setSettingsCat} activeDevice={activeDevice}/>
+          ) : section === "help" ? (
+            <>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24 }}>
+                <div style={{ fontSize:15, fontWeight:900, color:C.txt }}>Help</div>
+                <div style={{ color:C.muted, fontSize:14 }}>?</div>
               </div>
-            </div>
-
-            {/* section title */}
-            <div style={{ fontSize:18, fontWeight:800, color:C.txt, marginTop:2 }}>
-              {NAV.find(n=>n.id===section)?.tip ?? "Quick Settings"}
-            </div>
-
-            {/* quick settings: 3-card grid */}
-            {section==="quick" && (
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:12 }}>
-                {[
-                  <APCard   ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx} depths={depths}/>,
-                  <RTCard   rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}
-                            split={split} setSplit={setSplit} press={press} setPress={setPress}
-                            rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
-                            rtPressByIdx={rtPressByIdx} rtLiftByIdx={rtLiftByIdx}/>,
-                  <PerfCard pollingCode={pollCode} setPollingCode={setPollCode} connected={connected} send={send} liveReportHz={liveReportHz}/>,
-                ].map((card,i) => (
-                  <div key={i} style={{ background:C.surf, borderRadius:8,
-                    border:`1px solid ${C.bord}`, padding:16 }}>{card}</div>
-                ))}
+              <SidebarNavItem icon={IC.help} label="Connection Help" active={true} onClick={()=>setSection("help")}/>
+              <SidebarNavItem icon={IC.kb} label="Back to Keyboard" active={false} onClick={()=>setSection("quick")}/>
+              <div style={{ flex:1 }}/>
+              <div style={{ textAlign:"center", color:C.muted, fontSize:13, fontWeight:700 }}>FUN60 Web Driver</div>
+            </>
+          ) : (
+            <>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
+                <div style={{ fontSize:15, fontWeight:900, color:C.txt }}>Keyboard Configuration</div>
+                <div style={{ color:C.muted, fontSize:13 }}>▣</div>
               </div>
-            )}
 
-            {/* other panels */}
-            {section !== "quick" && (
-              <div style={{ background:C.surf, borderRadius:8, border:`1px solid ${C.bord}`, padding:20 }}>
-                {section==="ap"       && <APCard ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx} depths={depths}/>}
-                {section==="rt"       && <RTCard rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}
-                                           split={split} setSplit={setSplit} press={press} setPress={setPress}
-                                           rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
-                                           rtPressByIdx={rtPressByIdx} rtLiftByIdx={rtLiftByIdx}/>}
-                {section==="rgb"      && <RGBPanel ledOn={ledOn} setLedOn={setLedOn} ledMode={ledMode} setLedMode={setLedMode}
-                                           ledR={ledR} setLedR={setLedR} ledG={ledG} setLedG={setLedG}
-                                           ledB={ledB} setLedB={setLedB} ledSpeed={ledSpeed} setLedSpeed={setLedSpeed}
-                                           ledBri={ledBri} setLedBri={setLedBri} connected={connected} dSend={dSend}/>}
-                {section==="remap"    && <RemapPanel selectedKeys={selKeys}/>}
-                {section==="advanced" && <AdvancedPanel selectedKeys={selKeys} connected={connected} dSend={dSend} socdPairs={socdPairs} setSocdPairs={setSocdPairs}/>}
+              <div style={{ marginBottom:20 }}>
+                <DevicePicker open={deviceMenuOpen} setOpen={setDeviceMenuOpen}
+                  activeDevice={activeDevice} setActiveDevice={setActiveDevice} setDemo={setDemo}/>
               </div>
-            )}
-            <div style={{ height:20 }}/>
+
+              <div style={{ fontSize:11, fontWeight:900, color:C.muted, margin:"10px 12px 10px", letterSpacing:".03em" }}>Profiles</div>
+              <SidebarNavItem icon={IC.kb} label="Quick Settings" active={section==="quick"} onClick={()=>setSection("quick")}/>
+              <SidebarNavItem icon={IC.kb} label="My Profiles" active={section==="profiles"} onClick={()=>setSection("profiles")}/>
+
+              <div style={{ fontSize:11, fontWeight:900, color:C.muted, margin:"26px 12px 10px", letterSpacing:".03em" }}>Keyboard Configuration</div>
+              <SidebarNavItem icon={IC.tgt} label="Actuation Point" active={section==="ap"} onClick={()=>setSection("ap")}/>
+              <SidebarNavItem icon={IC.bolt} label="Rapid Trigger" active={section==="rt"} onClick={()=>setSection("rt")}/>
+              <SidebarNavItem icon={IC.rgb} label="RGB Settings" active={section==="rgb"} onClick={()=>setSection("rgb")}/>
+              <SidebarNavItem icon={IC.rmp} label="Remap" active={section==="remap"} onClick={()=>setSection("remap")}/>
+              <SidebarNavItem icon={IC.adv} label="Advanced Keys" active={section==="advanced"} onClick={()=>setSection("advanced")}/>
+
+              <div style={{ flex:1 }}/>
+              <div style={{ textAlign:"center", color:C.muted, fontSize:13, fontWeight:700, paddingBottom:4 }}>FUN60 Web Driver</div>
+            </>
+          )}
+</aside>
+
+        {/* main application area */}
+        <main style={{ background:C.bg, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+          {/* floating top profile bar */}
+          {!["settings","help"].includes(section) && <div style={{ height:82, flexShrink:0, position:"relative", display:"flex", justifyContent:"center", alignItems:"center", padding:"0 22px" }}>
+            <ProfileDropdown profiles={profiles} activeProfile={profile} open={profileMenuOpen} onToggle={(v)=>setProfileMenuOpen(typeof v === "boolean" ? v : !profileMenuOpen)} onSelect={handleProfileChange} onNewProfile={addProfile}/>
+            <div style={{ position:"absolute", right:20, display:"flex", alignItems:"center", gap:12 }}>
+              <span style={{ color:C.bordHv, fontSize:18 }}>↶</span>
+              <span style={{ color:C.bordHv, fontSize:18 }}>↷</span>
+              <button onClick={()=>setDemo(d=>!d)} style={{ border:"none", borderRadius:6, background:demo?C.accent:C.over, color:demo?C.atxt:C.sub, padding:"10px 15px", fontFamily:FONT, fontWeight:900, cursor:"pointer" }}>{demo?"Exit Demo Mode":"Demo Mode"}</button>
+            </div>
+          </div>}
+
+          <div style={{ flex:1, overflow:"auto", padding: section==="settings" || section==="help" ? "0 56px 28px" : "0 34px 34px" }}>
+            <div style={{ width:"min(1240px,100%)", margin:"0 auto", display:"flex", flexDirection:"column", gap:18 }}>
+              {!["settings","help"].includes(section) && <ConnectBanner hidOK={hidOK} status={status} info={info} err={err}
+                telemetry={telemetry} telemetryFmt={telemetryFmt}
+                onConnect={connect} onDisconnect={disconnect} onTelemetryConnect={openTelemetry}/>}
+
+              {section==="settings" ? (
+                <SettingsPanel settingsCat={settingsCat} setSettingsCat={setSettingsCat} themeName={themeName} setThemeName={setThemeName}/>
+              ) : section==="help" ? (
+                <HelpPanel/>
+              ) : section==="profiles" ? (
+                <MyProfilesPanel profiles={profiles} activeProfile={profile} onSelect={handleProfileChange} onNewProfile={addProfile} onDuplicateProfile={duplicateProfile} onToggleInactive={toggleProfileInactive}/>
+              ) : (<>
+              {/* keyboard hero */}
+              <div style={{ display:"grid", gridTemplateColumns:"118px minmax(720px,1fr)", alignItems:"center", gap:18 }}>
+                <div style={{ alignSelf:"center" }}>
+                  <div style={{ color:C.muted, fontSize:13, fontWeight:900, letterSpacing:".04em", marginBottom:8 }}>LAYERS <span style={{ opacity:.7 }}>ⓘ</span></div>
+                  {[
+                    ["Main Layer", true],
+                    ["Fn Layer 1", false]
+                  ].map(([label,active]) => (
+                    <button key={label} style={{ width:"100%", marginBottom:8, padding:"12px 10px", borderRadius:6, border:`1px solid ${active?C.accent:"transparent"}`, background:active?C.activeBg:C.over, color:active?C.txt:C.muted, fontFamily:FONT, fontSize:12, fontWeight:900, display:"flex", justifyContent:"space-between", cursor:"pointer" }}>
+                      <span>{label}</span><span>⋮</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ display:"flex", justifyContent:"center", alignItems:"center", minHeight:286, overflow:"visible" }}>
+                  <div style={{ transform:"scale(1.38)", transformOrigin:"center", filter:"drop-shadow(0 22px 28px rgba(0,0,0,.45))" }}>
+                    <KeyboardViz keyDepths={depths} selectedKeys={selKeys}
+                      onKeyClick={toggleKey}
+                      onSimPress={id => setSimKey(id, true)}
+                      onSimRelease={id => setSimKey(id, false)}
+                      section={section} apByIdx={apByIdx} globalAp={ap}
+                      rtPressByIdx={rtPressByIdx} globalSens={sens}/>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:4 }}>
+                <div style={{ fontSize:11, color:C.muted, fontWeight:900, letterSpacing:".04em", textTransform:"uppercase" }}>
+                  {selKeys.size === 0
+                    ? (section==="quick" ? "To adjust actuation point and rapid trigger, please select one or more keys first" : "Select one or more keys from the preview above")
+                    : `${selKeys.size} key${selKeys.size>1?"s":""} selected`}
+                </div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <button onClick={()=>setSelKeys(new Set(ALL_KEYS.map(k=>k.id)))} style={{ padding:"8px 13px", borderRadius:6, border:"none", background:C.over, color:C.sub, fontSize:12, fontWeight:800, cursor:"pointer", fontFamily:FONT }}>Select all keys</button>
+                  <button onClick={()=>setSelKeys(new Set())} disabled={selKeys.size===0} style={{ padding:"8px 13px", borderRadius:6, border:"none", background:C.surf, color: selKeys.size===0?C.muted:C.sub, fontSize:12, fontWeight:800, cursor:selKeys.size?"pointer":"default", fontFamily:FONT }}>Discard selection</button>
+                </div>
+              </div>
+
+              {section==="quick" && (
+                <>
+                  <h1 style={{ margin:"2px 0 0", fontSize:22, lineHeight:1, color:C.txt }}>Quick Settings</h1>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(3,minmax(250px,1fr))", gap:16 }}>
+                    <div style={{ background:C.surf, borderRadius:7, minHeight:330, border:`1px solid ${C.bord}`, padding:20 }}>
+                      <APCard ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx} depths={depths}/>
+                    </div>
+                    <div style={{ background:C.surf, borderRadius:7, minHeight:330, border:`1px solid ${C.bord}`, padding:20 }}>
+                      <RTCard rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}
+                        split={split} setSplit={setSplit} press={press} setPress={setPress}
+                        rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
+                        rtPressByIdx={rtPressByIdx} rtLiftByIdx={rtLiftByIdx}/>
+                    </div>
+                    <div style={{ background:C.surf, borderRadius:7, minHeight:330, border:`1px solid ${C.bord}`, padding:20 }}>
+                      <PerfCard pollingCode={pollCode} setPollingCode={setPollCode} connected={connected} send={send} liveReportHz={liveReportHz}/>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {section!=="quick" && (
+                <div style={{ background:C.surf, borderRadius:8, border:`1px solid ${C.bord}`, overflow:"hidden", minHeight:370 }}>
+                  <div style={{ height:54, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 20px", borderBottom:`1px solid ${C.bord}` }}>
+                    <div style={{ fontSize:18, fontWeight:900, color:C.txt }}>{section==="advanced" ? "Snappy Tappy (SOCD)" : NAV.find(n=>n.id===section)?.tip}</div>
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button style={{ padding:"7px 12px", border:"none", borderRadius:6, background:C.over, color:C.sub, fontSize:12, fontWeight:900, cursor:"pointer" }}>Cancel</button>
+                      <button style={{ padding:"7px 12px", border:"none", borderRadius:6, background:selKeys.size?C.accent:"#282c30", color:selKeys.size?C.atxt:C.muted, fontSize:12, fontWeight:900, cursor:selKeys.size?"pointer":"default" }}>Continue</button>
+                    </div>
+                  </div>
+                  <div style={{ padding:22 }}>
+                    {section==="ap" && <APCard ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx} depths={depths}/>} 
+                    {section==="rt" && <RTCard rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}
+                      split={split} setSplit={setSplit} press={press} setPress={setPress}
+                      rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
+                      rtPressByIdx={rtPressByIdx} rtLiftByIdx={rtLiftByIdx}/>} 
+                    {section==="rgb" && <RGBPanel ledOn={ledOn} setLedOn={setLedOn} ledMode={ledMode} setLedMode={setLedMode}
+                      ledR={ledR} setLedR={setLedR} ledG={ledG} setLedG={setLedG}
+                      ledB={ledB} setLedB={setLedB} ledSpeed={ledSpeed} setLedSpeed={setLedSpeed}
+                      ledBri={ledBri} setLedBri={setLedBri} connected={connected} dSend={dSend}/>} 
+                    {section==="remap" && <RemapPanel selectedKeys={selKeys}/>} 
+                    {section==="advanced" && (
+                      <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+                        <div>
+                          <div style={{ fontSize:13, fontWeight:900, color:C.sub, marginBottom:5 }}>Select 2 keys from your keyboard or the preview above to assign Snappy Tappy (SOCD)</div>
+                          <div style={{ color:C.muted, fontSize:12 }}>Snappy Tappy monitors the 2 selected keys and activates them based on your chosen settings.</div>
+                        </div>
+                        <div style={{ display:"flex", justifyContent:"center", gap:14, padding:"16px 0 26px" }}>
+                          {[0,1].map(i => {
+                            const chosen = [...selKeys][i];
+                            const key = chosen ? ALL_KEYS.find(k=>k.id===chosen) : null;
+                            return <div key={i} style={{ textAlign:"center" }}>
+                              <div style={{ color:C.sub, fontSize:12, fontWeight:900, marginBottom:6 }}>Key {i+1}</div>
+                              <div style={{ width:66, height:66, borderRadius:8, border:`1px dashed ${i===0?C.accent:C.bord}`, display:"flex", alignItems:"center", justifyContent:"center", color:key?C.txt:C.muted, background:C.surf, fontWeight:900 }}>{key?.l || "Assign"}</div>
+                            </div>;
+                          })}
+                        </div>
+                        <AdvancedPanel selectedKeys={selKeys} connected={connected} dSend={dSend} socdPairs={socdPairs} setSocdPairs={setSocdPairs}/>
+                        <div style={{ display:"flex", alignItems:"center", gap:10, background:C.over, borderRadius:7, padding:"13px 14px", color:C.sub, fontSize:12 }}>
+                          <span style={{ width:24, height:24, borderRadius:"50%", background:C.disabledBg, display:"flex", alignItems:"center", justifyContent:"center", color:C.accent }}>⚠</span>
+                          Use of Snappy Tappy (SOCD) is prohibited in certain games, such as Counter-Strike 2. Use caution in competitive environments.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              </>)}
+              <div style={{ height:22 }}/>
+            </div>
           </div>
-        </div>
+        </main>
       </div>
 
       <style>{`
         *{box-sizing:border-box}
+        body{margin:0;background:${C.bg}}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
         @keyframes popIn{0%{transform:scale(0);opacity:0}100%{transform:scale(1);opacity:1}}
         @keyframes fadeSlideUp{0%{opacity:0;transform:translateY(4px)}100%{opacity:1;transform:translateY(0)}}
         @keyframes fadeIn{0%{opacity:0}100%{opacity:1}}
         @keyframes deviceMenuIn{0%{opacity:0;transform:translateY(-6px) scale(.98)}100%{opacity:1;transform:translateY(0) scale(1)}}
         @keyframes railSelect{0%{transform:scaleY(.35);opacity:.2}100%{transform:scaleY(1);opacity:1}}
-        ::-webkit-scrollbar{width:5px}
+        ::-webkit-scrollbar{width:6px;height:6px}
         ::-webkit-scrollbar-track{background:${C.bg}}
-        ::-webkit-scrollbar-thumb{background:${C.bord};border-radius:3px}
-        button{outline:none; transition:opacity .12s, border-color .15s, color .15s, background .15s}
-        button:active{transform:scale(.97)}
+        ::-webkit-scrollbar-thumb{background:${C.bordHv};border-radius:6px}
+        button{outline:none; transition:opacity .12s, border-color .15s, color .15s, background .15s, transform .15s}
+        button:active{transform:scale(.985)}
         input[type=range]{-webkit-appearance:none;appearance:none}
       `}</style>
     </div>
