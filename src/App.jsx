@@ -464,8 +464,9 @@ function Toggle({ on, onChange }) {
   );
 }
 
-function Slider({ label, value, min, max, step, onChange, unit="mm", color=C.accent, noLabel, disabled }) {
+function Slider({ label, value, min, max, step, onChange, unit="mm", color=C.accent, noLabel, disabled, displayValue, displayText, ticks }) {
   const pct = ((value-min)/(max-min))*100;
+  const shownValue = displayValue ?? value;
   const [drag, setDrag] = useState(false);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:6, opacity: disabled ? .4 : 1 }}>
@@ -473,11 +474,19 @@ function Slider({ label, value, min, max, step, onChange, unit="mm", color=C.acc
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
           <span style={{ fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:".06em" }}>{label}</span>
           <span style={{ fontFamily:MONO, fontSize:12, color, fontWeight:700, transition:"color .15s" }}>
-            {Number(value).toFixed(2)}{unit}
+            {displayText ?? `${Number(shownValue).toFixed(2)}${unit}`}
           </span>
         </div>
       )}
       <div style={{ position:"relative", height:4, borderRadius:2, background:C.track }}>
+        {ticks?.map(t => {
+          const tp = ((t-min)/(max-min))*100;
+          return <div key={t} style={{
+            position:"absolute", left:`${tp}%`, top:"50%", transform:"translate(-50%,-50%)",
+            width:6, height:6, borderRadius:3, background:C.track,
+            border:`1px solid ${tp <= pct ? color : C.bord}`, zIndex:1,
+          }}/>;
+        })}
         <div style={{ position:"absolute", left:0, width:`${pct}%`, height:"100%", borderRadius:2, background:color, transition: drag?"none":"width .12s ease-out" }}/>
         <div style={{
           position:"absolute", top:"50%", left:`${pct}%`,
@@ -604,7 +613,7 @@ function sectionKeyColor(section, key, d, sel, hov_, apByIdx, globalAp) {
     const hue = Math.round((idx / ALL_KEYS.length) * 300);
     return hov_ ? `hsl(${hue},85%,68%)` : `hsl(${hue},78%,58%)`;
   }
-  if (section === "ap") return hov_ ? "#7b74ff" : "#5B51FF";
+  if (section === "ap") return hov_ ? C.keyHv : C.key;
   return hov_ ? C.keyHv : C.key;
 }
 
@@ -623,12 +632,6 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSimPress, onSimRel
         position:"relative",
         transition:"box-shadow .3s",
       }}>
-        <div style={{ position:"absolute", top:6, right:14, display:"flex", gap:5 }}>
-          {[C.accent,"#5B51FF",C.green].map((c,i) => (
-            <div key={i} style={{ width:5,height:5,borderRadius:"50%",background:c,opacity:.6,boxShadow:`0 0 4px ${c}` }}/>
-          ))}
-        </div>
-
         {ROWS.map((row, ri) => (
           <div key={ri} style={{ display:"flex", gap:G }}>
             {row.map(key => {
@@ -694,7 +697,7 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSimPress, onSimRel
                   )}
                   <span style={{
                     fontSize:key.u>=1.5?9:10, fontFamily:FONT, fontWeight:700,
-                    color: sel?C.selectedTxt:(section==="ap"?"#fff":(section==="quick"?"#fff":C.keyTxt)), userSelect:"none", lineHeight:1,
+                    color: sel?C.selectedTxt:(section==="quick"?"#fff":C.keyTxt), userSelect:"none", lineHeight:1,
                     marginTop: showValueLabels ? 4 : 0,
                   }}>{key.l}</span>
                   {d > 0.08 && <span style={{
@@ -1199,6 +1202,12 @@ function PerfCard({ pollingCode, setPollingCode, connected, send, liveReportHz =
 function RGBPanel({ ledOn, setLedOn, ledMode, setLedMode, ledR, setLedR, ledG, setLedG, ledB, setLedB,
                     ledSpeed, setLedSpeed, ledBri, setLedBri, connected, dSend }) {
   const MODES = Object.entries(LED_MODES);
+  // Hardware brightness/speed are exposed as 5 UI levels here:
+  // 0/1/2/3/4 -> 0/25/50/75/100%.
+  // 0 is the explicit off/lowest state; 4 is the real maximum.
+  const safeBri = Math.max(0, Math.min(4, Number.isFinite(ledBri) ? ledBri : 4));
+  const safeSpeed = Math.max(0, Math.min(4, Number.isFinite(ledSpeed) ? ledSpeed : 4));
+  const levelPct = v => `${Math.round((Math.max(0, Math.min(4, v)) / 4) * 100)}%`;
   const apply = (mode, spd, bri, r, g, b) => {
     if (connected) dSend("led", CMD.setLedParam(mode, spd, bri, r, g, b));
   };
@@ -1206,7 +1215,7 @@ function RGBPanel({ ledOn, setLedOn, ledMode, setLedMode, ledR, setLedR, ledG, s
   const setHex = h => {
     const [r,g,b] = [1,3,5].map(i => parseInt(h.slice(i,i+2),16));
     setLedR(r); setLedG(g); setLedB(b);
-    apply(ledMode, ledSpeed, ledBri, r, g, b);
+    apply(ledMode, safeSpeed, safeBri, r, g, b);
   };
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
@@ -1218,7 +1227,7 @@ function RGBPanel({ ledOn, setLedOn, ledMode, setLedMode, ledR, setLedR, ledG, s
         <div style={{ display:"flex", flexDirection:"column", gap:3, minWidth:110 }}>
           <div style={{ fontSize:9, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:4 }}>Mode</div>
           {MODES.map(([code, name]) => (
-            <button key={code} onClick={() => { setLedMode(+code); apply(+code,ledSpeed,ledBri,ledR,ledG,ledB); }} style={{
+            <button key={code} onClick={() => { setLedMode(+code); apply(+code,safeSpeed,safeBri,ledR,ledG,ledB); }} style={{
               padding:"6px 11px", border:`1px solid ${ledMode===+code?C.accent:C.bord}`,
               borderRadius:4, background:ledMode===+code?C.activeBg:"transparent",
               color:ledMode===+code?C.accent:C.muted, fontSize:12, textAlign:"left",
@@ -1248,10 +1257,12 @@ function RGBPanel({ ledOn, setLedOn, ledMode, setLedMode, ledR, setLedR, ledG, s
               </label>
             </div>
           </div>
-          <Slider label="Brightness" value={ledBri/7} min={0} max={1} step={1/7} unit=""
-            onChange={v => { const b=Math.round(v*7); setLedBri(b); apply(ledMode,ledSpeed,b,ledR,ledG,ledB); }}/>
-          <Slider label="Speed" value={ledSpeed/7} min={0} max={1} step={1/7} unit="" color="#a78bfa"
-            onChange={v => { const s=Math.round(v*7); setLedSpeed(s); apply(ledMode,s,ledBri,ledR,ledG,ledB); }}/>
+          <Slider label="Brightness" value={safeBri} min={0} max={4} step={1} unit=""
+            displayText={levelPct(safeBri)} ticks={[0,1,2,3,4]}
+            onChange={v => { const b=Math.max(0, Math.min(4, Math.round(v))); setLedBri(b); apply(ledMode,safeSpeed,b,ledR,ledG,ledB); }}/>
+          <Slider label="Speed" value={safeSpeed} min={0} max={4} step={1} unit="" color="#a78bfa"
+            displayText={levelPct(safeSpeed)} ticks={[0,1,2,3,4]}
+            onChange={v => { const s=Math.max(0, Math.min(4, Math.round(v))); setLedSpeed(s); apply(ledMode,s,safeBri,ledR,ledG,ledB); }}/>
         </div>
       </div>}
     </div>
@@ -1586,12 +1597,106 @@ function ProfileIcon({ profile, size=48 }) {
       width:size, height:size, borderRadius:"50%",
       border:`3px solid ${profile.color}`,
       boxShadow:`0 0 18px ${profile.color}88`,
-      background: profile.color === "#ef4444"
-        ? "repeating-linear-gradient(45deg,#d7f7e8 0 7px,#ef4444 7px 11px,#d7f7e8 11px 18px)"
-        : `linear-gradient(135deg,${C.over},${C.nav})`,
+      background: profile.image
+        ? C.nav
+        : profile.color === "#ef4444"
+          ? "repeating-linear-gradient(45deg,#d7f7e8 0 7px,#ef4444 7px 11px,#d7f7e8 11px 18px)"
+          : `linear-gradient(135deg,${C.over},${C.nav})`,
       color:C.txt, display:"flex", alignItems:"center", justifyContent:"center",
       fontSize:Math.round(size*.45), fontWeight:900, flexShrink:0,
-    }}>{profile.icon}</div>
+      overflow:"hidden",
+    }}>
+      {profile.image ? (
+        <img src={profile.image} alt="" style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }}/>
+      ) : profile.icon}
+    </div>
+  );
+}
+
+
+function ProfileEditModal({ profile, open, onClose, onSave }) {
+  const [name, setName] = useState(profile?.name || "");
+  const [image, setImage] = useState(profile?.image || "");
+  const [emojiIcon, setEmojiIcon] = useState(profile?.icon || "▣");
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setName(profile?.name || "");
+    setImage(profile?.image || "");
+    setEmojiIcon(profile?.icon || "▣");
+  }, [open, profile]);
+
+  if (!open || !profile) return null;
+
+  const readIconFile = file => {
+    if (!file || !file.type?.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => setImage(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  };
+
+  const save = () => {
+    const cleanName = name.trim() || profile.name || "Profile";
+    onSave?.({ name: cleanName, icon: emojiIcon || "▣", image });
+    onClose?.();
+  };
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position:"fixed", inset:0, zIndex:180, background:"rgba(0,0,0,.55)", backdropFilter:"blur(2px)" }}/>
+      <div style={{
+        position:"fixed", zIndex:181, left:"50%", top:"50%", transform:"translate(-50%,-50%)",
+        width:"min(520px,calc(100vw - 32px))", borderRadius:14,
+        background:C.surf, border:`1px solid ${C.bordHv}`,
+        boxShadow:"0 28px 90px rgba(0,0,0,.55)", padding:24,
+        color:C.txt, animation:"deviceMenuIn .16s cubic-bezier(.22,1,.36,1)",
+      }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
+          <div>
+            <div style={{ fontSize:24, fontWeight:900, letterSpacing:"-.02em" }}>Edit Profile</div>
+            <div style={{ color:C.muted, marginTop:4 }}>Rename it or upload a custom icon from your PC.</div>
+          </div>
+          <button onClick={onClose} style={{ width:34, height:34, borderRadius:8, border:"none", background:C.over, color:C.muted, cursor:"pointer", fontSize:18 }}>×</button>
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"110px 1fr", gap:22, alignItems:"start" }}>
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:12 }}>
+            <ProfileIcon profile={{ ...profile, icon:emojiIcon, image }} size={86}/>
+            <button onClick={()=>fileRef.current?.click()} style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"none", background:C.accent, color:C.atxt, fontFamily:FONT, fontWeight:900, cursor:"pointer" }}>Upload icon</button>
+            <button onClick={()=>setImage("")} style={{ width:"100%", padding:"8px 10px", borderRadius:8, border:`1px solid ${C.bord}`, background:"transparent", color:C.muted, fontFamily:FONT, fontWeight:800, cursor:"pointer" }}>Remove image</button>
+            <input ref={fileRef} type="file" accept="image/*" onChange={e=>readIconFile(e.target.files?.[0])} style={{ display:"none" }}/>
+          </div>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            <label style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              <span style={{ color:C.sub, fontWeight:900 }}>Profile name</span>
+              <input value={name} onChange={e=>setName(e.target.value)} autoFocus style={{
+                height:46, borderRadius:8, border:`1px solid ${C.bord}`, background:C.over,
+                color:C.txt, padding:"0 13px", fontFamily:FONT, fontWeight:900, fontSize:16,
+                outline:"none",
+              }}/>
+            </label>
+            <label style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              <span style={{ color:C.sub, fontWeight:900 }}>Fallback symbol</span>
+              <input value={emojiIcon} maxLength={2} onChange={e=>setEmojiIcon(e.target.value)} style={{
+                height:44, width:96, borderRadius:8, border:`1px solid ${C.bord}`, background:C.over,
+                color:C.txt, padding:"0 13px", fontFamily:FONT, fontWeight:900, fontSize:20,
+                textAlign:"center", outline:"none",
+              }}/>
+            </label>
+            <div style={{ color:C.muted, lineHeight:1.45, fontSize:13 }}>
+              Uploaded icons are stored in this app state as a Data URL. For now, this is UI-only; it does not write profile images to the keyboard firmware.
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display:"flex", justifyContent:"flex-end", gap:10, marginTop:24 }}>
+          <button onClick={onClose} style={{ padding:"10px 14px", borderRadius:8, border:`1px solid ${C.bord}`, background:"transparent", color:C.sub, fontFamily:FONT, fontWeight:900, cursor:"pointer" }}>Cancel</button>
+          <button onClick={save} style={{ padding:"10px 16px", borderRadius:8, border:"none", background:C.accent, color:C.atxt, fontFamily:FONT, fontWeight:900, cursor:"pointer" }}>Save Profile</button>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -1605,9 +1710,9 @@ function ProfileActionMenu({ open, onClose, onEdit, onDuplicate, onToggleInactiv
   ];
   return (
     <>
-      <div onClick={onClose} style={{ position:"fixed", inset:0, zIndex:88 }}/>
-      <div style={{
-        position:"absolute", top:54, right:10, zIndex:90, minWidth:270,
+      <div onClick={onClose} style={{ position:"fixed", inset:0, zIndex:110 }}/>
+      <div onClick={e=>e.stopPropagation()} style={{
+        position:"absolute", top:54, right:10, zIndex:130, minWidth:270,
         background:C.over, border:`1px solid ${C.bordHv}`, borderRadius:9,
         padding:"14px 0", boxShadow:"0 18px 55px rgba(0,0,0,.46)",
         animation:"deviceMenuIn .14s cubic-bezier(.22,1,.36,1)",
@@ -1627,16 +1732,16 @@ function ProfileActionMenu({ open, onClose, onEdit, onDuplicate, onToggleInactiv
   );
 }
 
-function ProfileCard({ profile, index, active, onSelect, onDuplicate, onToggleInactive }) {
+function ProfileCard({ profile, index, active, onSelect, onDuplicate, onToggleInactive, onEdit }) {
   const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <button onClick={onSelect} style={{
-      position:"relative", minHeight:78, borderRadius:10, padding:"13px 16px",
+    <div role="button" tabIndex={0} onClick={onSelect} onKeyDown={e=>{ if(e.key==="Enter" || e.key===" "){ e.preventDefault(); onSelect?.(); } }} style={{
+      position:"relative", zIndex: menuOpen ? 120 : (active ? 2 : 1), minHeight:78, borderRadius:10, padding:"13px 16px",
       background: active ? C.over : C.surf,
       border:`1px solid ${active ? C.accent : C.bord}`,
       color:C.txt, fontFamily:FONT, cursor:"pointer", textAlign:"left",
       display:"flex", alignItems:"center", gap:16,
-      boxShadow: active ? `0 0 0 1px ${C.accent}22, inset 0 1px 0 rgba(255,255,255,.04)` : "inset 0 1px 0 rgba(255,255,255,.03)",
+      boxShadow: menuOpen ? "0 22px 60px rgba(0,0,0,.36)" : (active ? `0 0 0 1px ${C.accent}22, inset 0 1px 0 rgba(255,255,255,.04)` : "inset 0 1px 0 rgba(255,255,255,.03)"),
       transition:"background .16s, border-color .16s, transform .16s, box-shadow .16s",
     }} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)"}} onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)"}}>
       <span style={{
@@ -1659,16 +1764,16 @@ function ProfileCard({ profile, index, active, onSelect, onDuplicate, onToggleIn
       <ProfileActionMenu
         open={menuOpen}
         onClose={()=>setMenuOpen(false)}
-        onEdit={()=>{}}
+        onEdit={()=>onEdit?.(index)}
         onDuplicate={()=>onDuplicate?.(index)}
         onToggleInactive={()=>onToggleInactive?.(index)}
         onboard={profile.onboard}
       />
-    </button>
+    </div>
   );
 }
 
-function MyProfilesPanel({ profiles, activeProfile, onSelect, onNewProfile, onDuplicateProfile, onToggleInactive }) {
+function MyProfilesPanel({ profiles, activeProfile, onSelect, onNewProfile, onDuplicateProfile, onToggleInactive, onEditProfile }) {
   const inactive = profiles.filter(p => !p.onboard);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:22, padding:"4px 0 24px", animation:"fadeSlideUp .18s ease-out" }}>
@@ -1688,7 +1793,7 @@ function MyProfilesPanel({ profiles, activeProfile, onSelect, onNewProfile, onDu
         </div>
         <p style={{ margin:"0 0 18px", fontSize:18, color:C.sub }}>To load a profile onto your keyboard, drag and drop it into this section. To swap profiles, drag and drop them onto each other.</p>
         <div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(280px,1fr))", gap:16 }}>
-          {profiles.filter(p=>p.onboard).map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={i} active={activeProfile===i} onSelect={()=>onSelect(i)} onDuplicate={onDuplicateProfile} onToggleInactive={onToggleInactive}/>) }
+          {profiles.filter(p=>p.onboard).map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={i} active={activeProfile===i} onSelect={()=>onSelect(profiles.findIndex(p=>p===prof))} onDuplicate={onDuplicateProfile} onToggleInactive={onToggleInactive} onEdit={onEditProfile}/>) }
         </div>
         <div style={{ marginTop:16, border:`2px dashed ${C.bord}`, borderRadius:9, height:86, display:"flex", alignItems:"center", justifyContent:"center", color:C.muted, fontSize:18, fontWeight:700 }}>Drag & Drop a Profile here</div>
       </section>
@@ -1698,14 +1803,14 @@ function MyProfilesPanel({ profiles, activeProfile, onSelect, onNewProfile, onDu
           <h2 style={{ margin:0, fontSize:20, color:C.txt }}>Inactive profiles</h2>
           <span style={{ width:24, height:24, borderRadius:"50%", border:`2px solid ${C.muted}`, color:C.muted, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900 }}>?</span>
         </div>
-        {inactive.length ? <div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(280px,1fr))", gap:16 }}>{inactive.map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={profiles.findIndex(p=>p===prof)} active={false} onSelect={()=>{}} onDuplicate={onDuplicateProfile} onToggleInactive={onToggleInactive}/>)}</div> :
+        {inactive.length ? <div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(280px,1fr))", gap:16 }}>{inactive.map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={profiles.findIndex(p=>p===prof)} active={false} onSelect={()=>onSelect(profiles.findIndex(p=>p===prof))} onDuplicate={onDuplicateProfile} onToggleInactive={onToggleInactive} onEdit={onEditProfile}/>)}</div> :
           <div style={{ border:`2px dashed ${C.bord}`, borderRadius:9, height:86, display:"flex", alignItems:"center", justifyContent:"center", color:C.muted, fontSize:18, fontWeight:700 }}>Drag & Drop a Profile here</div>}
       </section>
     </div>
   );
 }
 
-function ProfileDropdown({ profiles, activeProfile, open, onToggle, onSelect, onNewProfile }) {
+function ProfileDropdown({ profiles, activeProfile, open, onToggle, onSelect, onNewProfile, onEditProfile, onDuplicateProfile, onToggleInactive }) {
   const current = profiles[activeProfile] || profiles[0];
   return (
     <div style={{ position:"relative", width:"min(760px,62vw)" }}>
@@ -1733,7 +1838,7 @@ function ProfileDropdown({ profiles, activeProfile, open, onToggle, onSelect, on
         </div>
         <div style={{ color:C.muted, fontWeight:900, fontSize:14, marginBottom:10, textTransform:"uppercase" }}>Onboard profiles</div>
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          {profiles.filter(p=>p.onboard).map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={i} active={activeProfile===i} onSelect={()=>{ onSelect(i); onToggle(false); }}/>) }
+          {profiles.filter(p=>p.onboard).map((prof,i)=><ProfileCard key={prof.name+i} profile={prof} index={i} active={activeProfile===i} onSelect={()=>{ onSelect(profiles.findIndex(p=>p===prof)); onToggle(false); }} onDuplicate={onDuplicateProfile} onToggleInactive={onToggleInactive} onEdit={onEditProfile}/>) }
         </div>
       </div>}
     </div>
@@ -1841,8 +1946,8 @@ function SettingsCard({ children, style }) {
   return <div style={{ background:C.surf, border:`1px solid ${C.bord}`, borderRadius:8, padding:22, ...style }}>{children}</div>;
 }
 
-function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName }) {
-  const appearance = themeName === "light" ? "Light Theme" : "Dark Theme";
+function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName, resolvedThemeName }) {
+  const appearance = themeName === "system" ? `Following system (${resolvedThemeName === "light" ? "Light" : "Dark"})` : (themeName === "light" ? "Light Theme" : "Dark Theme");
   return (
     <div style={{ width:"min(760px,100%)", margin:"0 auto", padding:"26px 0 80px", animation:"fadeSlideUp .18s ease-out" }}>
       {settingsCat === "interface" && <>
@@ -1870,10 +1975,10 @@ function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName })
               {[
                 ["light", "☀", "Light Theme", false],
                 ["dark", "☾", "Dark Theme", false],
-                ["sync", "ↄ", "Sync with PC", true],
+                ["system", "ↄ", "Follow System", false],
               ].map(([id,icon,label,disabled]) => {
                 const active = id === themeName;
-                return <button key={id} disabled={disabled} onClick={()=>!disabled && setThemeName(id)} style={{
+                return <button key={id} disabled={disabled} onClick={()=>!disabled && setThemeName(id)} title={id === "system" ? "Follow your OS/browser color scheme" : label} style={{
                   width:124, height:96, borderRadius:8, border:`1px solid ${active?C.bordHv:C.bord}`,
                   background:active ? C.over : C.surf, color:disabled?C.muted:C.txt,
                   opacity:disabled?.55:1, cursor:disabled?"default":"pointer", fontFamily:FONT,
@@ -1882,7 +1987,7 @@ function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName })
                 }}>
                   <span style={{ fontSize:28, color:active?C.accent:C.muted }}>{icon}</span>
                   <span style={{ fontSize:15, fontWeight:800 }}>{label}</span>
-                  {disabled && <span style={{ position:"absolute", bottom:-18, background:C.accent, color:C.atxt, borderRadius:7, padding:"2px 7px", fontSize:10, fontWeight:900 }}>COMING SOON</span>}
+                  {id === "system" && <span style={{ position:"absolute", bottom:-18, background:active?C.accent:C.bordHv, color:active?C.atxt:C.sub, borderRadius:7, padding:"2px 7px", fontSize:10, fontWeight:900 }}>{active?"ACTIVE":"AUTO"}</span>}
                 </button>
               })}
             </div>
@@ -1925,11 +2030,16 @@ function HelpPanel() {
 ───────────────────────────────────────────────────────────────────────────── */
 export default function App() {
   const [themeName, setThemeName] = useState("dark");
+  const [systemTheme, setSystemTheme] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return "dark";
+    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  });
   const [section, setSection]   = useState("quick");
   const [settingsCat, setSettingsCat] = useState("interface");
   const [profile, setProfile]   = useState(0);
   const [profiles, setProfiles] = useState(PROFILE_PRESETS);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(null);
   const [selKeys, setSelKeys]   = useState(new Set());
   const [depths,  setDepths]    = useState({});
   const [demo,    setDemo]      = useState(false);
@@ -1953,6 +2063,20 @@ export default function App() {
   const [ledB,     setLedB]     = useState(255);
   const [socdPairs, setSocdPairs] = useState([]); // [[keyId1, keyId2], ...] — UI-only grouping
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const update = e => setSystemTheme(e.matches ? "light" : "dark");
+    update(mq);
+    mq.addEventListener?.("change", update);
+    mq.addListener?.(update);
+    return () => {
+      mq.removeEventListener?.("change", update);
+      mq.removeListener?.(update);
+    };
+  }, []);
+
+
   // Full per-key arrays as read back from hardware (index = magIdx). Kept
   // separate from the single "global" values above so the keyboard preview
   // and per-key detail readouts can show real per-key state, not just
@@ -1971,8 +2095,8 @@ export default function App() {
     if (s.pollingCode !== undefined) setPollCode(s.pollingCode);
     if (s.ledOn      !== undefined) setLedOn(s.ledOn);
     if (s.ledMode    !== undefined) setLedMode(s.ledMode);
-    if (s.ledSpeed   !== undefined) setLedSpeed(s.ledSpeed);
-    if (s.ledBri     !== undefined) setLedBri(s.ledBri);
+    if (s.ledSpeed   !== undefined) setLedSpeed(Math.max(0, Math.min(4, s.ledSpeed)));
+    if (s.ledBri     !== undefined) setLedBri(Math.max(0, Math.min(4, s.ledBri)));
     if (s.ledR       !== undefined) setLedR(s.ledR);
     if (s.ledG       !== undefined) setLedG(s.ledG);
     if (s.ledB       !== undefined) setLedB(s.ledB);
@@ -2132,14 +2256,21 @@ export default function App() {
     if (profile === idx) setProfile(0);
   };
 
-  C = THEMES[themeName];
+  const saveProfileEdit = updates => {
+    if (editingProfile == null) return;
+    setProfiles(prev => prev.map((p, i) => i === editingProfile ? { ...p, ...updates } : p));
+  };
+
+  const resolvedThemeName = themeName === "system" ? systemTheme : themeName;
+  C = THEMES[resolvedThemeName] || THEMES.dark;
   const pColor = profiles[profile]?.color || PCOLORS[profile] || C.accent;
-  const isLight = themeName === "light";
+  const isLight = resolvedThemeName === "light";
 
   return (
     <div style={{ height:"100vh", background:C.bg, color:C.txt, fontFamily:FONT, fontSize:13, overflow:"hidden" }}>
       <link rel="preconnect" href="https://fonts.googleapis.com"/>
       <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+      <ProfileEditModal profile={editingProfile == null ? null : profiles[editingProfile]} open={editingProfile != null} onClose={()=>setEditingProfile(null)} onSave={saveProfileEdit}/>
 
       <div style={{ display:"grid", gridTemplateColumns:"64px 318px 1fr", height:"100%", minWidth:1100 }}>
         {/* Wootility-style icon rail */}
@@ -2170,7 +2301,7 @@ export default function App() {
             </button>
           ))}
           <div style={{ flex:1 }}/>
-          <button onClick={() => setThemeName(isLight ? "dark" : "light")} style={{ width:38, height:38, borderRadius:8, border:"none", background:"transparent", color:C.muted, cursor:"pointer" }}>{isLight ? IC.moon : IC.sun}</button>
+          <button onClick={() => setThemeName(resolvedThemeName === "light" ? "dark" : "light")} style={{ width:38, height:38, borderRadius:8, border:"none", background:"transparent", color:C.muted, cursor:"pointer" }}>{isLight ? IC.moon : IC.sun}</button>
         </aside>
 
         {/* left configuration column */}
@@ -2221,7 +2352,7 @@ export default function App() {
         <main style={{ background:C.bg, overflow:"hidden", display:"flex", flexDirection:"column" }}>
           {/* floating top profile bar */}
           {!["settings","help"].includes(section) && <div style={{ height:82, flexShrink:0, position:"relative", display:"flex", justifyContent:"center", alignItems:"center", padding:"0 22px" }}>
-            <ProfileDropdown profiles={profiles} activeProfile={profile} open={profileMenuOpen} onToggle={(v)=>setProfileMenuOpen(typeof v === "boolean" ? v : !profileMenuOpen)} onSelect={handleProfileChange} onNewProfile={addProfile}/>
+            <ProfileDropdown profiles={profiles} activeProfile={profile} open={profileMenuOpen} onToggle={(v)=>setProfileMenuOpen(typeof v === "boolean" ? v : !profileMenuOpen)} onSelect={handleProfileChange} onNewProfile={addProfile} onEditProfile={setEditingProfile} onDuplicateProfile={duplicateProfile} onToggleInactive={toggleProfileInactive}/>
             <div style={{ position:"absolute", right:20, display:"flex", alignItems:"center", gap:12 }}>
               <span style={{ color:C.bordHv, fontSize:18 }}>↶</span>
               <span style={{ color:C.bordHv, fontSize:18 }}>↷</span>
@@ -2236,11 +2367,11 @@ export default function App() {
                 onConnect={connect} onDisconnect={disconnect} onTelemetryConnect={openTelemetry}/>}
 
               {section==="settings" ? (
-                <SettingsPanel settingsCat={settingsCat} setSettingsCat={setSettingsCat} themeName={themeName} setThemeName={setThemeName}/>
+                <SettingsPanel settingsCat={settingsCat} setSettingsCat={setSettingsCat} themeName={themeName} setThemeName={setThemeName} resolvedThemeName={resolvedThemeName}/>
               ) : section==="help" ? (
                 <HelpPanel/>
               ) : section==="profiles" ? (
-                <MyProfilesPanel profiles={profiles} activeProfile={profile} onSelect={handleProfileChange} onNewProfile={addProfile} onDuplicateProfile={duplicateProfile} onToggleInactive={toggleProfileInactive}/>
+                <MyProfilesPanel profiles={profiles} activeProfile={profile} onSelect={handleProfileChange} onNewProfile={addProfile} onDuplicateProfile={duplicateProfile} onToggleInactive={toggleProfileInactive} onEditProfile={setEditingProfile}/>
               ) : (<>
               {/* keyboard hero */}
               <div style={{ display:"grid", gridTemplateColumns:"118px minmax(720px,1fr)", alignItems:"center", gap:18 }}>
