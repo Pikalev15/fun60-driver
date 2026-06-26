@@ -48,7 +48,11 @@ const CMD = {
   getPolling:  ()                         => pkt(0x83),
   setPolling:  code                       => pkt(0x03, [0, code]),
   getLedOn:    ()                         => pkt(0x85),
-  setLedOn:    on                         => pkt(0x05, [on ? 1 : 0]),
+  // Hardware-observed polarity: the bit is a "disable" flag, not "enable" —
+  // 0 = LED on, 1 = LED off. (Confirmed backwards from the natural reading;
+  // toggling "off" in the UI was turning the keyboard's LEDs on and vice
+  // versa before this fix.)
+  setLedOn:    on                         => pkt(0x05, [on ? 0 : 1]),
   getLedParam: ()                         => pkt(0x87),
   setLedParam: (mode, spd, bri, r, g, b)  => {
     const p = new Uint8Array(RL);
@@ -272,8 +276,15 @@ function useKeyboard({ onSettings, onTelemetry }) {
     try {
       const settings = {};
       const prof = await send(CMD.getProfile()); settings.profile = prof[1] & 3;
-      const poll = await send(CMD.getPolling()); settings.pollingCode = poll[2];
-      const lon  = await send(CMD.getLedOn());   settings.ledOn = lon[1] === 1;
+      const poll = await send(CMD.getPolling());
+      // Byte position for the rate code wasn't hardware-confirmed — guard
+      // against the same kind of offset assumption that broke AP/RT by
+      // accepting whichever byte actually matches a known rate code.
+      const validCodes = new Set(Object.values(POLL));
+      settings.pollingCode = validCodes.has(poll[2]) ? poll[2]
+                            : validCodes.has(poll[1]) ? poll[1]
+                            : poll[2];
+      const lon  = await send(CMD.getLedOn());   settings.ledOn = lon[1] !== 1;
       const lp   = await send(CMD.getLedParam());
       settings.ledMode = lp[1]; settings.ledSpeed = lp[2]; settings.ledBri = lp[3];
       settings.ledR = lp[5]; settings.ledG = lp[6]; settings.ledB = lp[7];
@@ -720,15 +731,57 @@ function KeyTravelPreview({ depths, selectedKeys, ap }) {
     const d = depths?.[id] || 0;
     if (d >= depth) { depth = d; activeId = id; }
   });
+
   const key = ALL_KEYS.find(k => k.id === activeId);
   const label = key?.l || (activeId === "spc" ? "Space" : "—");
-  const travelMm = Math.max(0, Math.min(4, depth * 4));
-  const apNorm = Math.max(0, Math.min(1, ap / 4));
-  const fillPct = Math.max(0, Math.min(100, depth * 100));
-  const stemDrop = Math.max(0, Math.min(24, depth * 24));
-  const capDrop = Math.max(0, Math.min(18, depth * 18));
-  const pressed = depth > 0.025;
+
+  // keyDepths is a 0→1 ratio over the UI's 0→4mm scale.
+  // The FUN60 switch bottoms out around 3mm, so the switch art and meter
+  // hard-stop at 3.00mm while the scale still shows 0→4mm.
+  const MAX_TRAVEL_MM = 3.0;
+  const METER_MM = 4.0;
+  const rawTravelMm = Math.max(0, depth * METER_MM);
+  const travelMm = Math.max(0, Math.min(MAX_TRAVEL_MM, rawTravelMm));
+  const travelNorm = Math.max(0, Math.min(1, travelMm / MAX_TRAVEL_MM));
+  const meterPct = Math.max(0, Math.min(100, (travelMm / METER_MM) * 100));
+  const apNorm = Math.max(0, Math.min(1, ap / METER_MM));
+  const maxStopPct = (MAX_TRAVEL_MM / METER_MM) * 100;
+  const stemDrop = Math.max(0, Math.min(16, travelNorm * 16));
+  const pressed = travelMm > 0.025;
+  const maxed = travelMm >= MAX_TRAVEL_MM - 0.035;
   const actuated = travelMm >= ap && pressed;
+  const meterTicks = [0, 1, 2, 3, 4];
+
+  // ---- Isometric box geometry helpers --------------------------------
+  // A box is defined by its top diamond's 4 points (N/E/S/W, all sharing
+  // the same projection angle) extruded downward by height H. This keeps
+  // every face mathematically aligned instead of hand-picked coordinates
+  // that don't actually share a common vanishing geometry.
+  const iso = (cx, topY, hw, hd, H, taper = 1) => {
+    const N = [cx, topY], E = [cx + hw, topY + hd], S = [cx, topY + 2*hd], W = [cx - hw, topY + hd];
+    // Tapered (frustum) extrusion: the bottom diamond is scaled by `taper`
+    // around its own center rather than just dropped straight down. A
+    // straight extrusion (taper=1) is what read as a sharp, blocky cube —
+    // real switch housings flare outward toward the base.
+    const cy = topY + hd, cy2 = cy + H, bw = hw * taper, bd = hd * taper;
+    const N2 = [cx, cy2 - bd], E2 = [cx + bw, cy2], S2 = [cx, cy2 + bd], W2 = [cx - bw, cy2];
+    return { top: [N, E, S, W], left: [W, S, S2, W2], right: [S, E, E2, S2], N, E, S, W, N2, E2, S2, W2 };
+  };
+  const pts = arr => arr.map(p => p.join(",")).join(" ");
+  const centroid = arr => {
+    const n = arr.length;
+    return [arr.reduce((a,[x])=>a+x,0)/n, arr.reduce((a,[,y])=>a+y,0)/n];
+  };
+  const insetQuad = (arr, s) => {
+    const [cx, cy] = centroid(arr);
+    return arr.map(([x,y]) => [cx + (x-cx)*s, cy + (y-cy)*s]);
+  };
+
+  const base  = iso(135, 92, 64, 16, 32, 1.16);  // dark lower housing — flares outward
+  const green = iso(135, 44, 42, 13, 46, 1.24);  // mint upper housing — more pronounced flare
+  const stemA = iso(135, 40, 7, 3, 22, 1);        // cross-stem, wide blade — stays straight
+  const stemB = iso(135, 40, 3, 7, 22, 1);        // cross-stem, perpendicular blade
+  const window_ = insetQuad(green.left, 0.55);
 
   return (
     <div style={{
@@ -736,111 +789,150 @@ function KeyTravelPreview({ depths, selectedKeys, ap }) {
       background:`linear-gradient(180deg,${C.over},${C.panel})`,
       border:`1px solid ${actuated ? C.accent : C.bord}`,
       boxShadow: actuated ? `0 0 18px ${C.accent}22, inset 0 1px 0 rgba(255,255,255,.04)` : "inset 0 1px 0 rgba(255,255,255,.035)",
-      display:"grid", gridTemplateColumns:"minmax(160px,1fr) 74px", gap:16,
+      display:"grid", gridTemplateColumns:"minmax(230px,1fr) 92px", gap:16,
       alignItems:"center", overflow:"hidden",
       transition:"border-color .16s ease, box-shadow .16s ease",
     }}>
-      <div style={{ minHeight:128, position:"relative", display:"flex", alignItems:"center", justifyContent:"center", perspective:520 }}>
-        <div style={{
-          position:"absolute", bottom:8, width:158, height:24, borderRadius:"50%",
-          background:"rgba(0,0,0,.28)", filter:"blur(8px)",
-          transform:`scale(${1 + depth*.09})`, opacity:.65,
-          transition:"transform .06s linear, opacity .12s ease",
-        }}/>
+      <div style={{ minHeight:166, position:"relative", display:"flex", alignItems:"center", justifyContent:"center" }}>
+        <svg width="270" height="166" viewBox="0 0 270 166" role="img" aria-label="magnetic switch travel preview" style={{ overflow:"visible" }}>
+          <defs>
+            <linearGradient id="baseTop" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor="#666c6e"/><stop offset=".5" stopColor="#585d60"/><stop offset="1" stopColor="#4a4f51"/>
+            </linearGradient>
+            <linearGradient id="baseLeft" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#4f5456"/><stop offset=".6" stopColor="#3c4042"/><stop offset="1" stopColor="#303437"/>
+            </linearGradient>
+            <linearGradient id="baseRight" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#3d4144"/><stop offset=".6" stopColor="#2d3032"/><stop offset="1" stopColor="#212427"/>
+            </linearGradient>
+            <linearGradient id="greenTop" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor={actuated ? "#d4ffe9" : "#c6ffe2"}/>
+              <stop offset=".5" stopColor={actuated ? "#9ff4c4" : "#94edbc"}/>
+              <stop offset="1" stopColor={actuated ? "#83eeb6" : "#74e8ac"}/>
+            </linearGradient>
+            <linearGradient id="greenLeft" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#86efb7"/><stop offset=".6" stopColor="#5fd699"/><stop offset="1" stopColor="#4ccb8c"/>
+            </linearGradient>
+            <linearGradient id="greenRight" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#52ca8c"/><stop offset=".6" stopColor="#39ad73"/><stop offset="1" stopColor="#2a9c64"/>
+            </linearGradient>
+            <linearGradient id="stemFace" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stopColor="#d4dade"/><stop offset=".5" stopColor="#ffffff"/><stop offset="1" stopColor="#aab2b7"/>
+            </linearGradient>
+            <linearGradient id="stemSide" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#b9c0c4"/><stop offset="1" stopColor="#8c9396"/>
+            </linearGradient>
+            <radialGradient id="swSheen" cx="0.35" cy="0.3" r="0.65">
+              <stop offset="0" stopColor="rgba(255,255,255,.55)"/>
+              <stop offset="1" stopColor="rgba(255,255,255,0)"/>
+            </radialGradient>
+            <filter id="swShadow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7"/></filter>
+            <filter id="swGlow" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+            <filter id="swSoft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.2"/></filter>
+          </defs>
 
-        {/* switch housing */}
-        <div style={{
-          position:"relative", width:154, height:84,
-          transform:"rotateX(58deg) rotateZ(-28deg)", transformStyle:"preserve-3d",
-        }}>
-          <div style={{
-            position:"absolute", inset:"28px 18px 0", borderRadius:8,
-            background:"linear-gradient(135deg,#24272a,#111314)",
-            border:`1px solid ${C.bord}`, transform:"translateZ(0px)",
-            boxShadow:"0 15px 28px rgba(0,0,0,.45)",
-          }}/>
-          <div style={{
-            position:"absolute", left:20, right:20, top:13, height:54, borderRadius:7,
-            background:"linear-gradient(135deg,#78f0b1,#32b879 62%,#1c6f4f)",
-            clipPath:"polygon(9% 0,91% 0,100% 100%,0 100%)",
-            border:`1px solid rgba(255,255,255,.22)`,
-            boxShadow: actuated ? `0 0 20px ${C.green}44, inset 0 1px 0 rgba(255,255,255,.35)` : "inset 0 1px 0 rgba(255,255,255,.32)",
-          }}/>
-          {[0,1,2].map(i => (
-            <div key={i} style={{
-              position:"absolute", top:25+i*11, left:38+i*4, width:78-i*7, height:10,
-              borderRadius:3, border:"1px solid rgba(255,255,255,.18)",
-              background:"rgba(255,255,255,.08)",
-            }}/>
-          ))}
-        </div>
+          <ellipse cx="135" cy="148" rx="84" ry="17" fill="rgba(0,0,0,.4)" filter="url(#swShadow)"/>
 
-        {/* stem + keycap moving vertically, like the reference */}
-        <div style={{
-          position:"absolute", left:"50%", top:15,
-          transform:`translateX(-50%) translateY(${stemDrop}px)`,
-          transition:"transform .035s linear", display:"flex", flexDirection:"column", alignItems:"center",
-        }}>
-          <div style={{
-            width:28, height:36, borderRadius:6,
-            background:"linear-gradient(90deg,#d8dcdf,#ffffff 45%,#a8adb2)",
-            border:"1px solid rgba(0,0,0,.22)",
-            boxShadow:"inset 0 2px 0 rgba(255,255,255,.8), 0 3px 8px rgba(0,0,0,.34)",
-          }}/>
-        </div>
-        <div style={{
-          position:"absolute", left:"50%", top:4,
-          transform:`translateX(-50%) translateY(${capDrop}px) rotateX(58deg) rotateZ(-28deg)`,
-          width:70, height:54, borderRadius:8,
-          background:`linear-gradient(135deg,${pressed ? C.keyHv : "#fbfbfb"},${pressed ? C.accent : "#cfd5d9"})`,
-          clipPath:"polygon(14% 0,86% 0,100% 100%,0 100%)",
-          border:"1px solid rgba(0,0,0,.22)",
-          boxShadow: pressed ? `0 5px 12px rgba(0,0,0,.38), 0 0 14px ${C.accent}33` : "0 10px 18px rgba(0,0,0,.36)",
-          transition:"transform .035s linear, background .12s ease, box-shadow .12s ease",
-          display:"flex", alignItems:"center", justifyContent:"center", color:"#263036",
-          fontSize:14, fontWeight:900, fontFamily:FONT,
-        }}>{label}</div>
+          {/* dark lower housing — round joins + soft edge blur so corners read
+              as gently rounded rather than razor-sharp polygon vertices */}
+          <g strokeLinejoin="round" filter="url(#swSoft)">
+            <polygon points={pts(base.left)}  fill="url(#baseLeft)"  stroke="rgba(255,255,255,.05)" strokeWidth="1.5"/>
+            <polygon points={pts(base.right)} fill="url(#baseRight)" stroke="rgba(0,0,0,.08)" strokeWidth="1.5"/>
+          </g>
+          <polygon points={pts(base.top)} fill="url(#baseTop)" stroke="rgba(255,255,255,.14)" strokeWidth="1.2" strokeLinejoin="round"/>
+
+          {/* mint upper housing */}
+          <g strokeLinejoin="round" filter="url(#swSoft)">
+            <polygon points={pts(green.left)}  fill="url(#greenLeft)"  stroke="rgba(255,255,255,.18)" strokeWidth="1.5"/>
+            <polygon points={pts(green.right)} fill="url(#greenRight)" stroke="rgba(0,40,20,.14)" strokeWidth="1.5"/>
+          </g>
+          <polygon points={pts(green.top)} fill="url(#greenTop)" stroke="rgba(255,255,255,.55)" strokeWidth="1.3" strokeLinejoin="round"/>
+          {/* soft specular sheen, like a gently curved product render */}
+          <polygon points={pts(green.top)} fill="url(#swSheen)" opacity=".8"/>
+
+          {/* recessed front window, inset into the left face */}
+          <polygon points={pts(window_)} fill="rgba(255,255,255,.22)" stroke="rgba(10,90,55,.5)" strokeWidth="1" strokeLinejoin="round"/>
+          <polygon points={pts(insetQuad(window_, 0.62))} fill="rgba(255,255,255,.16)"/>
+
+          {/* cross-shaped stem, presses downward on actuation */}
+          <g transform={`translate(0 ${stemDrop})`} filter={pressed ? "url(#swGlow)" : undefined} style={{ transition:"transform .035s linear" }} strokeLinejoin="round">
+            <polygon points={pts(stemA.left)}  fill="url(#stemSide)" stroke="rgba(0,0,0,.18)"/>
+            <polygon points={pts(stemA.right)} fill="#9aa1a5"        stroke="rgba(0,0,0,.16)"/>
+            <polygon points={pts(stemB.left)}  fill="url(#stemSide)" stroke="rgba(0,0,0,.18)"/>
+            <polygon points={pts(stemB.right)} fill="#9aa1a5"        stroke="rgba(0,0,0,.16)"/>
+            <polygon points={pts(stemA.top)} fill="url(#stemFace)" stroke="rgba(0,0,0,.2)"/>
+            <polygon points={pts(stemB.top)} fill="url(#stemFace)" stroke="rgba(0,0,0,.2)"/>
+          </g>
+
+          {maxed && <g>
+            <rect x="107" y="138" width="60" height="3" rx="1.5" fill={C.accent} filter="url(#swGlow)"/>
+            <text x="138" y="152" textAnchor="middle" fill={C.accent} fontSize="9" fontFamily="monospace" fontWeight="800">3.0mm MAX</text>
+          </g>}
+        </svg>
       </div>
 
-      <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"flex-end" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:9, justifyContent:"flex-end" }}>
         <div style={{
           height:136, width:34, borderRadius:18, background:C.track,
           border:`1px solid ${C.bord}`, position:"relative", overflow:"hidden",
           boxShadow:"inset 0 2px 8px rgba(0,0,0,.34)",
         }}>
+          {/* downward fill: 0.0 at top, hard-stop at 3.0mm */}
           <div style={{
-            position:"absolute", left:3, right:3, bottom:3, height:`calc(${fillPct}% - 6px)`, minHeight: pressed ? 4 : 0,
+            position:"absolute", left:3, right:3, top:3,
+            height:`calc(${meterPct}% - 6px)`, minHeight: pressed ? 4 : 0,
+            maxHeight:`calc(${maxStopPct}% - 6px)`,
             borderRadius:15,
             background:`linear-gradient(180deg,${C.accent},${C.green})`,
             boxShadow: pressed ? `0 0 12px ${C.green}55` : "none",
             transition:"height .035s linear, box-shadow .12s ease",
           }}/>
           <div style={{
-            position:"absolute", left:0, right:0, bottom:`${apNorm*100}%`, height:2,
+            position:"absolute", left:5, right:5, top:`calc(${maxStopPct}% - 1px)`, height:2,
+            background: maxed ? C.accent : "rgba(255,255,255,.34)",
+            boxShadow: maxed ? `0 0 8px ${C.accent}` : "none",
+            borderRadius:2,
+            transition:"background .12s ease, box-shadow .12s ease",
+          }}/>
+          {maxed && <div style={{
+            position:"absolute", left:10, right:10, top:`calc(${maxStopPct}% + 4px)`, height:3,
+            background:C.accent, borderRadius:2,
+            boxShadow:`0 0 10px ${C.accent}`,
+          }}/>} 
+          <div style={{
+            position:"absolute", left:0, right:0, top:`${apNorm*100}%`, height:2,
             background:C.red, boxShadow:`0 0 7px ${C.red}`,
           }}/>
-          {[0,1,2,3,4].map(mm => (
+          {meterTicks.map(mm => (
             <div key={mm} style={{
-              position:"absolute", left:4, right:4, bottom:`${(mm/4)*100}%`, height:1,
-              background:"rgba(255,255,255,.18)",
+              position:"absolute", left:mm===3 ? 1 : 5, right:mm===3 ? 1 : 5,
+              top:`${(mm/METER_MM)*100}%`, height:mm===3 ? 1.5 : 1,
+              background:mm===3 ? "rgba(255,255,255,.34)" : "rgba(255,255,255,.18)",
             }}/>
           ))}
         </div>
         <div style={{ height:136, display:"flex", flexDirection:"column", justifyContent:"space-between", fontFamily:MONO }}>
-          {[0,1,2,3,4].map(mm => (
-            <span key={mm} style={{ fontSize:9, color: Math.abs(travelMm-mm)<.22 ? C.accent : C.muted }}>{mm.toFixed(1)}</span>
+          {meterTicks.map(mm => (
+            <span key={mm} style={{
+              fontSize:9,
+              color: mm===3 && maxed ? C.accent : (Math.abs(travelMm-mm)<.18 ? C.accent : C.muted),
+              fontWeight: mm===3 && maxed ? 800 : 400,
+            }}>{mm.toFixed(1)}</span>
           ))}
         </div>
       </div>
 
       <div style={{ gridColumn:"1 / -1", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
         <div style={{ fontSize:11, color:C.muted }}>
-          {pressed ? `${label} travel` : "Press a key to preview travel"}
+          {pressed ? `${label} switch travel` : "Press a key to preview switch travel"}
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <span style={{ fontFamily:MONO, fontSize:12, fontWeight:800, color: actuated ? C.green : C.accent }}>
             {travelMm.toFixed(2)}mm
           </span>
+          {maxed && <span style={{ fontSize:9, color:C.accent, fontWeight:900, letterSpacing:".07em" }}>MAX</span>}
           <span style={{ fontSize:10, color: actuated ? C.green : C.muted, fontWeight:800, letterSpacing:".06em" }}>
             {actuated ? "ACTUATED" : `AP ${ap.toFixed(2)}mm`}
           </span>
@@ -1497,11 +1589,16 @@ export default function App() {
     if (s.ledG       !== undefined) setLedG(s.ledG);
     if (s.ledB       !== undefined) setLedB(s.ledB);
     if (s.mag) {
-      if (s.mag[MAG.PRESS])    { setApByIdx(s.mag[MAG.PRESS]);      setAp(cmm(s.mag[MAG.PRESS][0])); }
+      // magIdx 0 is an unused matrix slot (no physical key maps to it — see
+      // the keymap below, Esc starts at magIdx 1). Reading [0] as a "global"
+      // representative value always returns 0, which is why AP/RT/RT-on
+      // looked broken. Use Esc's real magIdx instead.
+      const REF_IDX = 1;
+      if (s.mag[MAG.PRESS])    { setApByIdx(s.mag[MAG.PRESS]);      setAp(cmm(s.mag[MAG.PRESS][REF_IDX])); }
       if (s.mag[MAG.LIFT])     setLiftByIdx(s.mag[MAG.LIFT]);
-      if (s.mag[MAG.RT_PRESS]) { setRtPressByIdx(s.mag[MAG.RT_PRESS]); setSens(cmm(s.mag[MAG.RT_PRESS][0])); }
+      if (s.mag[MAG.RT_PRESS]) { setRtPressByIdx(s.mag[MAG.RT_PRESS]); setSens(cmm(s.mag[MAG.RT_PRESS][REF_IDX])); }
       if (s.mag[MAG.RT_LIFT])  setRtLiftByIdx(s.mag[MAG.RT_LIFT]);
-      if (s.mag[MAG.MODE])     { setModeByIdx(s.mag[MAG.MODE]);     setRtOn(s.mag[MAG.MODE][0] === MODE.RAPID_TRIGGER); }
+      if (s.mag[MAG.MODE])     { setModeByIdx(s.mag[MAG.MODE]);     setRtOn(s.mag[MAG.MODE][REF_IDX] === MODE.RAPID_TRIGGER); }
       if (s.mag[MAG.SNAPTAP_EN]) setSnaptapByIdx(s.mag[MAG.SNAPTAP_EN]);
     }
   }, []);
