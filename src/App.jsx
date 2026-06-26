@@ -240,16 +240,15 @@ function useKeyboard({ onSettings }) {
       settings.ledMode = lp[1]; settings.ledSpeed = lp[2]; settings.ledBri = lp[3];
       settings.ledR = lp[5]; settings.ledG = lp[6]; settings.ledB = lp[7];
 
-      // Magnetism — 2 pages per sub-command
+      // Magnetism — 2 pages per sub-command. Read every sub-command that the
+      // UI can display or edit, including SNAPTAP_EN, so nothing silently
+      // falls back to a default after connecting.
       const mag = {};
-      for (const sub of [MAG.PRESS, MAG.LIFT, MAG.RT_PRESS, MAG.RT_LIFT]) {
+      for (const sub of [MAG.PRESS, MAG.LIFT, MAG.RT_PRESS, MAG.RT_LIFT, MAG.MODE, MAG.SNAPTAP_EN]) {
         const p0 = await send(CMD.getMag(sub, 0));
         const p1 = await send(CMD.getMag(sub, 1));
         mag[sub] = [...parseMagPage(p0, sub), ...parseMagPage(p1, sub)];
       }
-      const m0 = await send(CMD.getMag(MAG.MODE, 0));
-      const m1 = await send(CMD.getMag(MAG.MODE, 1));
-      mag[MAG.MODE] = [...parseMagPage(m0, MAG.MODE), ...parseMagPage(m1, MAG.MODE)];
       settings.mag = mag;
       return settings;
     } catch (e) { console.warn("readSettings partial failure:", e); return {}; }
@@ -279,11 +278,19 @@ function useKeyboard({ onSettings }) {
         await device.close(); dev.current = null;
         throw new Error(`Wrong device (dev_id ${infor?.devId ?? "?"}, expected ${DEV_ID})`);
       }
-      setInfo(infor); setStatus("connected");
+      setInfo(infor);
       device.addEventListener("disconnect", () => {
         dev.current = null; setStatus("idle"); setInfo(null);
       });
-      const s = await readSettings(); onSettings?.(s);
+      // Read the FULL hardware state (profile, polling, LED, every per-key
+      // magnetism array) and let the caller apply it to UI state BEFORE we
+      // flip to "connected" — this is what prevents toggles like RGB from
+      // flashing their default value for a frame before snapping to the
+      // keyboard's real, already-on state.
+      setStatus("reading");
+      const s = await readSettings();
+      onSettings?.(s);
+      setStatus("connected");
     } catch (e) { setStatus("error"); setErr(e.message); dev.current = null; }
   }, [hidOK, send, readSettings, onSettings]);
 
@@ -303,41 +310,49 @@ function Toggle({ on, onChange }) {
     <div onClick={() => onChange(!on)} style={{
       width:40, height:22, borderRadius:11, cursor:"pointer", flexShrink:0,
       background: on ? C.accent : C.track, position:"relative",
-      transition:"background .18s",
+      transition:"background .25s cubic-bezier(.4,0,.2,1)",
       boxShadow: on ? `0 0 8px ${C.accent}55` : "none",
     }}>
       <div style={{
-        position:"absolute", top:3, left: on ? 21 : 3,
-        width:16, height:16, borderRadius:8,
+        position:"absolute", top:2, left: on ? 20 : 2,
+        width:18, height:18, borderRadius:9,
         background: on ? C.atxt : "#9aa0a6",
-        transition:"left .18s", boxShadow:"0 1px 3px rgba(0,0,0,.5)",
-      }}/>
+        transition:"left .25s cubic-bezier(.34,1.56,.64,1)",
+        boxShadow:"0 1px 3px rgba(0,0,0,.5)",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        fontSize:9, fontWeight:900, color: on ? C.accent : C.track,
+      }}>{on ? "✓" : "✕"}</div>
     </div>
   );
 }
 
 function Slider({ label, value, min, max, step, onChange, unit="mm", color=C.accent, noLabel, disabled }) {
   const pct = ((value-min)/(max-min))*100;
+  const [drag, setDrag] = useState(false);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:6, opacity: disabled ? .4 : 1 }}>
       {!noLabel && (
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
           <span style={{ fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:".06em" }}>{label}</span>
-          <span style={{ fontFamily:MONO, fontSize:12, color, fontWeight:700 }}>
+          <span style={{ fontFamily:MONO, fontSize:12, color, fontWeight:700, transition:"color .15s" }}>
             {Number(value).toFixed(2)}{unit}
           </span>
         </div>
       )}
       <div style={{ position:"relative", height:4, borderRadius:2, background:C.track }}>
-        <div style={{ position:"absolute", left:0, width:`${pct}%`, height:"100%", borderRadius:2, background:color }}/>
+        <div style={{ position:"absolute", left:0, width:`${pct}%`, height:"100%", borderRadius:2, background:color, transition: drag?"none":"width .12s ease-out" }}/>
         <div style={{
           position:"absolute", top:"50%", left:`${pct}%`,
-          transform:"translate(-50%,-50%)", width:14, height:14, borderRadius:7,
+          transform:`translate(-50%,-50%) scale(${drag?1.25:1})`, width:14, height:14, borderRadius:7,
           background:C.surf, border:`2.5px solid ${color}`, pointerEvents:"none",
+          transition: drag ? "left .03s linear, transform .12s cubic-bezier(.34,1.56,.64,1)" : "left .12s ease-out, transform .12s cubic-bezier(.34,1.56,.64,1)",
+          boxShadow: drag ? `0 0 0 5px ${color}22` : "none",
         }}/>
         <input type="range" min={min} max={max} step={step} value={value}
           disabled={disabled}
           onChange={e => onChange(parseFloat(e.target.value))}
+          onPointerDown={() => setDrag(true)}
+          onPointerUp={() => setDrag(false)}
           style={{ position:"absolute", inset:0, opacity:0, cursor: disabled?"not-allowed":"pointer", width:"100%", margin:0 }}/>
       </div>
     </div>
@@ -407,22 +422,24 @@ function ConnectBanner({ hidOK, status, info, err, onConnect, onDisconnect }) {
       display:"flex", alignItems:"center", gap:12,
       padding:"8px 14px", background:C.surf,
       border:`1px solid ${C.bord}`, borderRadius:7,
+      transition:"background .2s",
     }}>
-      <div style={{ width:8, height:8, borderRadius:4, background: status==="connecting" ? C.accent : C.muted,
-        animation: status==="connecting" ? "pulse 1s infinite" : "none" }}/>
+      <div style={{ width:8, height:8, borderRadius:4, background: (status==="connecting"||status==="reading") ? C.accent : C.muted,
+        animation: (status==="connecting"||status==="reading") ? "pulse 1s infinite" : "none" }}/>
       <span style={{ fontSize:12, color: err ? C.red : C.muted }}>
-        {status==="connecting" ? "Connecting…" : err ? `Error: ${err}` : "No keyboard connected"}
+        {status==="connecting" ? "Connecting…" : status==="reading" ? "Reading settings from keyboard…" : err ? `Error: ${err}` : "No keyboard connected"}
       </span>
       <span style={{ fontSize:11, color:C.muted }}>
-        {!err && "Settings shown are defaults until connected."}
+        {!err && status==="idle" && "Settings shown are defaults until connected."}
       </span>
-      <button onClick={onConnect} disabled={status==="connecting"} style={{
+      <button onClick={onConnect} disabled={status==="connecting"||status==="reading"} style={{
         marginLeft:"auto", display:"flex", alignItems:"center", gap:6,
         padding:"6px 14px", borderRadius:4,
         background: C.accent, border:"none", color:C.atxt,
-        fontSize:12, fontWeight:700, cursor: status==="connecting" ? "wait" : "pointer",
+        fontSize:12, fontWeight:700, cursor: (status==="connecting"||status==="reading") ? "wait" : "pointer",
         fontFamily:FONT, boxShadow:`0 0 10px ${C.accent}44`,
-        opacity: status==="connecting" ? .6 : 1,
+        opacity: (status==="connecting"||status==="reading") ? .6 : 1,
+        transition:"opacity .2s",
       }}>
         🔌 Connect Keyboard
       </button>
@@ -433,19 +450,33 @@ function ConnectBanner({ hidOK, status, info, err, onConnect, onDisconnect }) {
 /* ─────────────────────────────────────────────────────────────────────────────
    KEYBOARD VIZ
 ───────────────────────────────────────────────────────────────────────────── */
-function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDeselect, onSimPress, onSimRelease }) {
+function sectionKeyColor(section, key, d, sel, hov_, apByIdx, globalAp) {
+  if (sel) return hov_ ? C.keySlH : C.keySel;
+  if (d > 0.02) return C.keyDepthBg(d);
+  if (section === "quick") {
+    const idx = ALL_KEYS.indexOf(key);
+    const hue = Math.round((idx / ALL_KEYS.length) * 300);
+    return hov_ ? `hsl(${hue},85%,68%)` : `hsl(${hue},78%,58%)`;
+  }
+  if (section === "ap") return hov_ ? "#7b74ff" : "#5B51FF";
+  return hov_ ? C.keyHv : C.key;
+}
+
+function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSimPress, onSimRelease, section, apByIdx, globalAp, rtPressByIdx, globalSens }) {
   const [hov, setHov] = useState(null);
+  const showApLabels = section === "ap";
+  const showRtLabels = section === "rt";
+  const showValueLabels = showApLabels || showRtLabels;
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
-      {/* body */}
       <div style={{
         background:C.kbBody, borderRadius:"10px 10px 14px 14px",
         padding:"12px 13px 16px", display:"inline-flex", flexDirection:"column", gap:G,
         border:`1px solid ${C.kbBord}`,
         boxShadow:C.shadow,
         position:"relative",
+        transition:"box-shadow .3s",
       }}>
-        {/* status LEDs */}
         <div style={{ position:"absolute", top:6, right:14, display:"flex", gap:5 }}>
           {[C.accent,"#5B51FF",C.green].map((c,i) => (
             <div key={i} style={{ width:5,height:5,borderRadius:"50%",background:c,opacity:.6,boxShadow:`0 0 4px ${c}` }}/>
@@ -458,9 +489,10 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
               const d   = keyDepths[key.id] || 0;
               const sel = selectedKeys.has(key.id);
               const hov_ = hov === key.id;
-              const bg  = sel ? (hov_ ? C.keySlH : C.keySel)
-                        : d > 0.02 ? C.keyDepthBg(d)
-                        : hov_ ? C.keyHv : C.key;
+              const bg  = sectionKeyColor(section, key, d, sel, hov_, apByIdx, globalAp);
+              const keyApMm = key.magIdx >= 0 && apByIdx?.[key.magIdx] != null ? cmm(apByIdx[key.magIdx]) : globalAp;
+              const keyRtMm = key.magIdx >= 0 && rtPressByIdx?.[key.magIdx] != null ? cmm(rtPressByIdx[key.magIdx]) : globalSens;
+              const labelVal = showApLabels ? keyApMm : keyRtMm;
               return (
                 <button key={key.id}
                   onClick={() => onKeyClick(key.id)}
@@ -476,31 +508,48 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
                   style={{
                     width:kw(key.u), height:38, borderRadius:4, flexShrink:0,
                     background:bg, border:"none", padding:0, cursor:"pointer",
-                    outline: sel ? `2px solid rgba(91,81,255,.8)` : "none", outlineOffset:-1,
+                    outline: sel ? `1.5px solid rgba(255,255,255,.5)` : "none", outlineOffset:-1,
                     boxShadow: d>0.02 ? C.keyDepthShadow(d) : C.keyRestShadow,
                     display:"flex", flexDirection:"column",
                     alignItems:"center", justifyContent:"center",
                     position:"relative", overflow:"hidden",
                     transform: d>0 ? `translateY(${Math.round(d*2)}px)` : "none",
-                    transition:"background .06s",
+                    transition:"background .12s ease-out, transform .05s linear, outline-color .15s",
                   }}
                 >
+                  {/* selection dot — matches reference's white-dot marker */}
+                  {sel && <div style={{
+                    position:"absolute", top:3, right:3,
+                    width:5, height:5, borderRadius:"50%",
+                    background:"#fff", boxShadow:"0 0 4px rgba(255,255,255,.8)",
+                    animation:"popIn .18s cubic-bezier(.34,1.56,.64,1)",
+                  }}/>}
                   {/* depth bar */}
                   {d > 0.02 && <div style={{
                     position:"absolute", bottom:0, left:0,
                     width:`${d*100}%`, height:2,
                     background: sel ? C.selectedMark : C.keyDepthBar,
-                    borderTopRightRadius:1,
+                    borderTopRightRadius:1, transition:"width .03s linear",
                   }}/>}
                   {/* shared-slot indicator */}
-                  {key.shared && <div style={{
+                  {key.shared && !sel && <div style={{
                     position:"absolute", top:2, right:2,
                     width:3, height:3, borderRadius:"50%",
-                    background: sel ? C.selectedDot : C.sharedDot,
+                    background: C.sharedDot,
                   }}/>}
+                  {/* per-key value label (Actuation Point + Rapid Trigger sections) */}
+                  {showValueLabels && !sel && d < 0.02 && labelVal != null && (
+                    <span style={{
+                      position:"absolute", top:2, left:3,
+                      fontSize:6, fontFamily:MONO,
+                      color: showApLabels ? "rgba(255,255,255,.65)" : C.muted,
+                      lineHeight:1,
+                    }}>{labelVal.toFixed(2)}</span>
+                  )}
                   <span style={{
                     fontSize:key.u>=1.5?9:10, fontFamily:FONT, fontWeight:700,
-                    color: sel?C.selectedTxt:C.keyTxt, userSelect:"none", lineHeight:1,
+                    color: sel?C.selectedTxt:(section==="ap"?"#fff":(section==="quick"?"#fff":C.keyTxt)), userSelect:"none", lineHeight:1,
+                    marginTop: showValueLabels ? 4 : 0,
                   }}>{key.l}</span>
                   {d > 0.08 && <span style={{
                     fontSize:6.5, fontFamily:MONO, lineHeight:1, marginTop:1,
@@ -515,24 +564,49 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
           fontSize:7, fontWeight:800, letterSpacing:".2em",
           color:C.watermark, textTransform:"uppercase" }}>wooting</div>
       </div>
+    </div>
+  );
+}
 
-      {/* sub-bar */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"7px 2px 0" }}>
-        <span style={{ fontSize:10, color:C.muted, maxWidth:"60%" }}>
-          {selectedKeys.size === 0
-            ? "SELECT ONE OR MORE KEYS TO CONFIGURE PER-KEY SETTINGS"
-            : `${selectedKeys.size} KEY${selectedKeys.size>1?"S":""} SELECTED`}
-        </span>
-        <div style={{ display:"flex", gap:6 }}>
-          {[["Select all keys", onSelectAll], ["Discard selection", onDeselect]].map(([label, fn]) => (
-            <button key={label} onClick={fn} style={{
-              padding:"4px 11px", borderRadius:4, border:`1px solid ${C.bord}`,
-              background:"transparent", color:C.sub, fontSize:11,
-              cursor:"pointer", fontFamily:FONT,
-            }}>{label}</button>
-          ))}
-        </div>
+/* ─────────────────────────────────────────────────────────────────────────────
+   SELECTED KEY DETAILS — shows the real per-key activation range for
+   whichever key(s) are currently selected ("click range" readout).
+───────────────────────────────────────────────────────────────────────────── */
+function SelectedKeyDetails({ selectedKeys, mode, apByIdx, liftByIdx, rtPressByIdx, rtLiftByIdx }) {
+  const keys = [...selectedKeys].map(id => ALL_KEYS.find(k => k.id === id)).filter(Boolean);
+  if (keys.length === 0) return null;
+  const shown = keys.slice(0, 6);
+  return (
+    <div style={{
+      display:"flex", flexDirection:"column", gap:5, padding:"10px 12px",
+      background:C.over, borderRadius:6, border:`1px solid ${C.bord}`,
+      animation:"fadeSlideUp .18s ease-out",
+    }}>
+      <div style={{ fontSize:9, fontWeight:700, color:C.muted, letterSpacing:".06em", textTransform:"uppercase" }}>
+        {mode === "ap" ? "Current click range" : "Current RT sensitivity"}
       </div>
+      {shown.map(k => {
+        const i = k.magIdx;
+        let line;
+        if (mode === "ap") {
+          const p = i>=0 && apByIdx?.[i] != null ? cmm(apByIdx[i]).toFixed(2) : "—";
+          const l = i>=0 && liftByIdx?.[i] != null ? cmm(liftByIdx[i]).toFixed(2) : "—";
+          line = `activates ${p}mm · releases ${l}mm`;
+        } else {
+          const p = i>=0 && rtPressByIdx?.[i] != null ? cmm(rtPressByIdx[i]).toFixed(2) : "—";
+          const l = i>=0 && rtLiftByIdx?.[i] != null ? cmm(rtLiftByIdx[i]).toFixed(2) : "—";
+          line = `press Δ ${p}mm · release Δ ${l}mm`;
+        }
+        return (
+          <div key={k.id} style={{ display:"flex", justifyContent:"space-between", fontSize:11, gap:10 }}>
+            <span style={{ fontFamily:MONO, color:C.accent, fontWeight:700, flexShrink:0 }}>{k.l || "Space"}</span>
+            <span style={{ color:C.sub, fontFamily:MONO, textAlign:"right" }}>{line}</span>
+          </div>
+        );
+      })}
+      {keys.length > shown.length && (
+        <div style={{ fontSize:10, color:C.muted }}>+{keys.length - shown.length} more selected</div>
+      )}
     </div>
   );
 }
@@ -540,7 +614,7 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSelectAll, onDesel
 /* ─────────────────────────────────────────────────────────────────────────────
    QUICK SETTINGS CARDS
 ───────────────────────────────────────────────────────────────────────────── */
-function APCard({ ap, setAp, connected, dSend, selectedKeys }) {
+function APCard({ ap, setAp, connected, dSend, selectedKeys, apByIdx, liftByIdx }) {
   const selArr = [...selectedKeys];
   const handleChange = v => {
     setAp(v);
@@ -593,11 +667,12 @@ function APCard({ ap, setAp, connected, dSend, selectedKeys }) {
           Press a key to test the actuation point.
         </div>
       </div>
+      <SelectedKeyDetails selectedKeys={selectedKeys} mode="ap" apByIdx={apByIdx} liftByIdx={liftByIdx}/>
     </div>
   );
 }
 
-function RTCard({ rtOn, setRtOn, sens, setSens, split, setSplit, press, setPress, rel, setRel, connected, dSend, selectedKeys }) {
+function RTCard({ rtOn, setRtOn, sens, setSens, split, setSplit, press, setPress, rel, setRel, connected, dSend, selectedKeys, rtPressByIdx, rtLiftByIdx }) {
   const selArr = [...selectedKeys];
   const handleToggle = v => {
     setRtOn(v);
@@ -661,6 +736,7 @@ function RTCard({ rtOn, setRtOn, sens, setSens, split, setSplit, press, setPress
           </>}
         </div>
       </>}
+      <SelectedKeyDetails selectedKeys={selectedKeys} mode="rt" rtPressByIdx={rtPressByIdx} rtLiftByIdx={rtLiftByIdx}/>
     </div>
   );
 }
@@ -1045,6 +1121,17 @@ export default function App() {
   const [ledB,     setLedB]     = useState(255);
   const [socdPairs, setSocdPairs] = useState([]); // [[keyId1, keyId2], ...] — UI-only grouping
 
+  // Full per-key arrays as read back from hardware (index = magIdx). Kept
+  // separate from the single "global" values above so the keyboard preview
+  // and per-key detail readouts can show real per-key state, not just
+  // whatever the last slider drag happened to be.
+  const [apByIdx,       setApByIdx]       = useState(null);
+  const [liftByIdx,     setLiftByIdx]     = useState(null);
+  const [rtPressByIdx,  setRtPressByIdx]  = useState(null);
+  const [rtLiftByIdx,   setRtLiftByIdx]   = useState(null);
+  const [modeByIdx,     setModeByIdx]     = useState(null);
+  const [snaptapByIdx,  setSnaptapByIdx]  = useState(null);
+
   // Populate state from keyboard on connect
   const onSettings = useCallback(s => {
     if (!s) return;
@@ -1058,9 +1145,12 @@ export default function App() {
     if (s.ledG       !== undefined) setLedG(s.ledG);
     if (s.ledB       !== undefined) setLedB(s.ledB);
     if (s.mag) {
-      if (s.mag[MAG.PRESS]?.[0])    setAp(cmm(s.mag[MAG.PRESS][0]));
-      if (s.mag[MAG.RT_PRESS]?.[0]) setSens(cmm(s.mag[MAG.RT_PRESS][0]));
-      if (s.mag[MAG.MODE]?.[0] !== undefined) setRtOn((s.mag[MAG.MODE][0] & RT_BIT) !== 0);
+      if (s.mag[MAG.PRESS])    { setApByIdx(s.mag[MAG.PRESS]);      setAp(cmm(s.mag[MAG.PRESS][0])); }
+      if (s.mag[MAG.LIFT])     setLiftByIdx(s.mag[MAG.LIFT]);
+      if (s.mag[MAG.RT_PRESS]) { setRtPressByIdx(s.mag[MAG.RT_PRESS]); setSens(cmm(s.mag[MAG.RT_PRESS][0])); }
+      if (s.mag[MAG.RT_LIFT])  setRtLiftByIdx(s.mag[MAG.RT_LIFT]);
+      if (s.mag[MAG.MODE])     { setModeByIdx(s.mag[MAG.MODE]);     setRtOn((s.mag[MAG.MODE][0] & RT_BIT) !== 0); }
+      if (s.mag[MAG.SNAPTAP_EN]) setSnaptapByIdx(s.mag[MAG.SNAPTAP_EN]);
     }
   }, []);
 
@@ -1302,8 +1392,31 @@ export default function App() {
               onKeyClick={toggleKey}
               onSimPress={id => setSimKey(id, true)}
               onSimRelease={id => setSimKey(id, false)}
-              onSelectAll={()=>setSelKeys(new Set(ALL_KEYS.map(k=>k.id)))}
-              onDeselect={()=>setSelKeys(new Set())}/>
+              section={section} apByIdx={apByIdx} globalAp={ap}
+              rtPressByIdx={rtPressByIdx} globalSens={sens}/>
+
+            {/* select all / discard — sits with the section title, matching reference */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:-4 }}>
+              <span style={{ fontSize:10, color:C.muted, letterSpacing:".04em" }}>
+                {selKeys.size === 0
+                  ? (section==="ap"||section==="rt"||section==="remap"||section==="advanced"
+                      ? "SELECT ONE OR MORE KEYS TO CONFIGURE PER-KEY SETTINGS" : "")
+                  : `${selKeys.size} KEY${selKeys.size>1?"S":""} SELECTED`}
+              </span>
+              <div style={{ display:"flex", gap:6 }}>
+                <button onClick={()=>setSelKeys(new Set(ALL_KEYS.map(k=>k.id)))} style={{
+                  padding:"4px 11px", borderRadius:4, border:`1px solid ${C.bord}`,
+                  background:"transparent", color:C.sub, fontSize:11, cursor:"pointer", fontFamily:FONT,
+                  transition:"border-color .15s, color .15s",
+                }}>Select all keys</button>
+                <button onClick={()=>setSelKeys(new Set())} disabled={selKeys.size===0} style={{
+                  padding:"4px 11px", borderRadius:4, border:`1px solid ${C.bord}`,
+                  background:"transparent", color: selKeys.size===0?C.disabledTxt:C.sub, fontSize:11,
+                  cursor: selKeys.size===0?"default":"pointer", fontFamily:FONT,
+                  opacity: selKeys.size===0?.5:1, transition:"opacity .15s",
+                }}>Discard selection</button>
+              </div>
+            </div>
 
             {/* section title */}
             <div style={{ fontSize:18, fontWeight:800, color:C.txt, marginTop:2 }}>
@@ -1314,10 +1427,11 @@ export default function App() {
             {section==="quick" && (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:12 }}>
                 {[
-                  <APCard   ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys}/>,
+                  <APCard   ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx}/>,
                   <RTCard   rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}
                             split={split} setSplit={setSplit} press={press} setPress={setPress}
-                            rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}/>,
+                            rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
+                            rtPressByIdx={rtPressByIdx} rtLiftByIdx={rtLiftByIdx}/>,
                   <PerfCard pollingCode={pollCode} setPollingCode={setPollCode} connected={connected} dSend={dSend}/>,
                 ].map((card,i) => (
                   <div key={i} style={{ background:C.surf, borderRadius:8,
@@ -1329,10 +1443,11 @@ export default function App() {
             {/* other panels */}
             {section !== "quick" && (
               <div style={{ background:C.surf, borderRadius:8, border:`1px solid ${C.bord}`, padding:20 }}>
-                {section==="ap"       && <APCard ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys}/>}
+                {section==="ap"       && <APCard ap={ap} setAp={setAp} connected={connected} dSend={dSend} selectedKeys={selKeys} apByIdx={apByIdx} liftByIdx={liftByIdx}/>}
                 {section==="rt"       && <RTCard rtOn={rtOn} setRtOn={setRtOn} sens={sens} setSens={setSens}
                                            split={split} setSplit={setSplit} press={press} setPress={setPress}
-                                           rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}/>}
+                                           rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
+                                           rtPressByIdx={rtPressByIdx} rtLiftByIdx={rtLiftByIdx}/>}
                 {section==="rgb"      && <RGBPanel ledOn={ledOn} setLedOn={setLedOn} ledMode={ledMode} setLedMode={setLedMode}
                                            ledR={ledR} setLedR={setLedR} ledG={ledG} setLedG={setLedG}
                                            ledB={ledB} setLedB={setLedB} ledSpeed={ledSpeed} setLedSpeed={setLedSpeed}
@@ -1349,10 +1464,14 @@ export default function App() {
       <style>{`
         *{box-sizing:border-box}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+        @keyframes popIn{0%{transform:scale(0);opacity:0}100%{transform:scale(1);opacity:1}}
+        @keyframes fadeSlideUp{0%{opacity:0;transform:translateY(4px)}100%{opacity:1;transform:translateY(0)}}
+        @keyframes fadeIn{0%{opacity:0}100%{opacity:1}}
         ::-webkit-scrollbar{width:5px}
         ::-webkit-scrollbar-track{background:${C.bg}}
         ::-webkit-scrollbar-thumb{background:${C.bord};border-radius:3px}
-        button{outline:none}
+        button{outline:none; transition:opacity .12s, border-color .15s, color .15s, background .15s}
+        button:active{transform:scale(.97)}
         input[type=range]{-webkit-appearance:none;appearance:none}
       `}</style>
     </div>

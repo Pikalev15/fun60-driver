@@ -1,6 +1,6 @@
 <div align="center">
 
-# FUN60 Driver
+# FUN60 Custom Web Driver
 
 Browser-based WebHID configurator for the MonsGeek FUN60 Ultra TMR.
 
