@@ -21,8 +21,35 @@ const MODE = { NORMAL: 0, RAPID_TRIGGER: 1, DKS: 2, MODTAP: 3, TOGGLE_HOLD: 4, T
 const RT_BIT = MODE.RAPID_TRIGGER;
 const POLL = { 8000: 0x00, 4000: 0x01, 2000: 0x02, 1000: 0x03, 500: 0x04, 250: 0x05, 125: 0x07 };
 const POLL_HZ = { 0x00: 8000, 0x01: 4000, 0x02: 2000, 0x03: 1000, 0x04: 500, 0x05: 250, 0x07: 125 };
-const LED_MODES = { 0x00: "Off", 0x01: "Static", 0x02: "Breathing", 0x03: "Wave",
-                    0x04: "Reactive", 0x05: "Rainbow", 0x06: "Spiral", 0x08: "Ripple" };
+// LED mode IDs from the MonsGeek/Akko RY5088 protocol docs / linux driver.
+// Keep the labels tied to the raw numeric mode code so the UI does not call
+// mode 0x03 "Wave" when the keyboard actually treats it as Neon, etc.
+const LED_MODES = {
+  0x00: "Off",
+  0x01: "Constant",
+  0x02: "Breathing",
+  0x03: "Neon",
+  0x04: "Wave",
+  0x05: "Ripple",
+  0x06: "Raindrop",
+  0x07: "Snake",
+  0x08: "Reactive",
+  0x09: "Converge",
+  0x0A: "Sine Wave",
+  0x0B: "Kaleidoscope",
+  0x0C: "Line Wave",
+  0x0D: "User Picture",
+  0x0E: "Laser",
+  0x0F: "Circle Wave",
+  0x10: "Rainbow",
+  0x11: "Rain Down",
+  0x12: "Meteor",
+  0x13: "Reactive Off",
+  0x14: "Music Patterns",
+  0x15: "Screen Sync",
+  0x16: "Music Bars",
+  0x17: "Train",
+};
 
 const mm  = v => Math.round(v * 100); // mm → centi-mm (wire units)
 const cmm = v => v / 100;             // centi-mm → mm (display)
@@ -95,6 +122,18 @@ function parseMagPage(r, sub) {
   else { for (let i = 0; i < 32; i++) out.push(r[i*2] | (r[i*2+1] << 8)); }
   return out;
 }
+
+function extractPollingCode(r) {
+  if (!r) return null;
+  const validCodes = new Set(Object.values(POLL));
+  if (validCodes.has(r[2])) return r[2];
+  if (validCodes.has(r[1])) return r[1];
+  return null;
+}
+function formatHz(hz) {
+  return hz >= 1000 ? `${hz / 1000}K` : `${hz}`;
+}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 
 // Exact live magnetic telemetry parser from monsgeek-akko-linux docs.
@@ -280,10 +319,7 @@ function useKeyboard({ onSettings, onTelemetry }) {
       // Byte position for the rate code wasn't hardware-confirmed — guard
       // against the same kind of offset assumption that broke AP/RT by
       // accepting whichever byte actually matches a known rate code.
-      const validCodes = new Set(Object.values(POLL));
-      settings.pollingCode = validCodes.has(poll[2]) ? poll[2]
-                            : validCodes.has(poll[1]) ? poll[1]
-                            : poll[2];
+      settings.pollingCode = extractPollingCode(poll) ?? poll[2];
       const lon  = await send(CMD.getLedOn());   settings.ledOn = lon[1] !== 1;
       const lp   = await send(CMD.getLedParam());
       settings.ledMode = lp[1]; settings.ledSpeed = lp[2]; settings.ledBri = lp[3];
@@ -1073,47 +1109,86 @@ function RTCard({ rtOn, setRtOn, sens, setSens, split, setSplit, press, setPress
   );
 }
 
-function PerfCard({ pollingCode, setPollingCode, connected, dSend }) {
+function PerfCard({ pollingCode, setPollingCode, connected, send, liveReportHz = 0 }) {
   const hz = POLL_HZ[pollingCode] ?? 1000;
   const RATES = [8000, 4000, 2000, 1000, 500, 250, 125];
-  const handleRate = code => {
+  const [verify, setVerify] = useState({ state:"idle", expectedCode:null, actualCode:null, raw:"" });
+
+  const handleRate = async code => {
     setPollingCode(code);
-    if (connected) dSend("poll", CMD.setPolling(code), 0);
+    setVerify({ state: connected ? "pending" : "idle", expectedCode: code, actualCode:null, raw:"" });
+    if (!connected || !send) return;
+
+    try {
+      await send(CMD.setPolling(code));
+      await sleep(90);
+      const res = await send(CMD.getPolling());
+      const actualCode = extractPollingCode(res);
+      if (actualCode != null) setPollingCode(actualCode);
+      setVerify({
+        state: actualCode === code ? "ok" : "fail",
+        expectedCode: code,
+        actualCode,
+        raw: [...res].map(x => x.toString(16).padStart(2,"0")).join(" "),
+      });
+    } catch (e) {
+      setVerify({ state:"error", expectedCode: code, actualCode:null, raw: e?.message || String(e) });
+    }
   };
+
+  const expectedHz = verify.expectedCode != null ? POLL_HZ[verify.expectedCode] : hz;
+  const actualHz = verify.actualCode != null ? POLL_HZ[verify.actualCode] : null;
+  const ok = verify.state === "ok";
+  const pending = verify.state === "pending";
+  const failed = verify.state === "fail" || verify.state === "error";
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
       <div>
         <div style={{ fontSize:14, fontWeight:700, color:C.txt }}>Tachyon Mode</div>
         <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>
-          Maximizes input speed by prioritizing keypress response.
+          Sets the keyboard USB polling target. Readback confirms whether firmware accepted it.
         </div>
       </div>
       <div>
         <div style={{ fontSize:9, fontWeight:700, color:C.muted, letterSpacing:".07em", textTransform:"uppercase", marginBottom:6 }}>SCAN RATE</div>
-        <div style={{ fontSize:22, fontWeight:800, color:C.accent }}>{hz >= 1000 ? `${hz/1000}K` : hz} Hz</div>
+        <div style={{ fontSize:22, fontWeight:800, color:C.accent }}>{formatHz(hz)} Hz</div>
       </div>
       <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
         {RATES.map(r => {
           const code = POLL[r];
+          const active = (POLL_HZ[pollingCode]??1000)===r;
           return (
             <button key={r} onClick={() => handleRate(code)} style={{
-              padding:"4px 8px", borderRadius:4, border:`1px solid ${(POLL_HZ[pollingCode]??1000)===r?C.accent:C.bord}`,
-              background:(POLL_HZ[pollingCode]??1000)===r?C.activeBg:"transparent",
-              color:(POLL_HZ[pollingCode]??1000)===r?C.accent:C.muted,
-              fontSize:10, fontFamily:MONO, cursor:"pointer",
-              fontWeight:(POLL_HZ[pollingCode]??1000)===r?700:400,
+              padding:"4px 8px", borderRadius:4, border:`1px solid ${active?C.accent:C.bord}`,
+              background:active?C.activeBg:"transparent",
+              color:active?C.accent:C.muted,
+              fontSize:10, fontFamily:MONO, cursor: connected?"pointer":"pointer",
+              fontWeight:active?700:400,
             }}>{r>=1000?`${r/1000}K`:r}</button>
           );
         })}
       </div>
-      {hz >= 2000 && (
-        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 11px",
-          borderRadius:6, background:"rgba(74,222,128,.07)", border:"1px solid rgba(74,222,128,.2)" }}>
-          <div style={{ width:16,height:16,borderRadius:"50%",background:C.green,
-            display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#0d3320",fontWeight:800 }}>✓</div>
-          <span style={{ fontSize:11, color:C.green, fontWeight:600 }}>True {hz >= 1000 ? `${hz/1000}K` : hz}Hz Polling Active</span>
+
+      <div style={{ display:"flex", flexDirection:"column", gap:6, padding:"9px 11px",
+        borderRadius:6, background:C.over, border:`1px solid ${ok?"rgba(74,222,128,.32)":failed?"rgba(238,63,63,.32)":C.bord}` }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
+          <span style={{ fontSize:9, fontWeight:800, color:C.muted, letterSpacing:".07em", textTransform:"uppercase" }}>Polling verification</span>
+          <span style={{ fontSize:10, fontFamily:MONO, color: ok?C.green:failed?C.red:C.muted, fontWeight:800 }}>
+            {!connected ? "connect first" : pending ? "checking…" : ok ? "readback ✓" : failed ? "mismatch" : "not checked"}
+          </span>
         </div>
-      )}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
+          <div style={{ fontSize:11, color:C.muted }}>Requested <b style={{ color:C.txt }}>{formatHz(expectedHz)}Hz</b></div>
+          <div style={{ fontSize:11, color:C.muted }}>Readback <b style={{ color:actualHz?C.txt:C.muted }}>{actualHz ? `${formatHz(actualHz)}Hz` : "—"}</b></div>
+        </div>
+        <div style={{ fontSize:11, color:C.muted }}>
+          Live HID depth events: <b style={{ color:liveReportHz ? C.accent : C.muted, fontFamily:MONO }}>{liveReportHz}</b> reports/s
+        </div>
+        {verify.raw && <div title={verify.raw} style={{ fontSize:9, color:C.muted, fontFamily:MONO, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+          raw {verify.raw}
+        </div>}
+      </div>
     </div>
   );
 }
@@ -1147,8 +1222,11 @@ function RGBPanel({ ledOn, setLedOn, ledMode, setLedMode, ledR, setLedR, ledG, s
               padding:"6px 11px", border:`1px solid ${ledMode===+code?C.accent:C.bord}`,
               borderRadius:4, background:ledMode===+code?C.activeBg:"transparent",
               color:ledMode===+code?C.accent:C.muted, fontSize:12, textAlign:"left",
-              fontFamily:FONT, cursor:"pointer",
-            }}>{name}</button>
+              fontFamily:FONT, cursor:"pointer", display:"flex", justifyContent:"space-between", gap:10, alignItems:"center",
+            }}>
+              <span>{name}</span>
+              <span style={{ fontFamily:MONO, fontSize:9, opacity:.65 }}>0x{(+code).toString(16).padStart(2,"0")}</span>
+            </button>
           ))}
         </div>
         <div style={{ flex:1, display:"flex", flexDirection:"column", gap:14, minWidth:200 }}>
@@ -1605,8 +1683,20 @@ export default function App() {
 
 
 
+  const telemetryRateWindowRef = useRef([]);
+  const telemetryRateLastUpdateRef = useRef(0);
+  const [liveReportHz, setLiveReportHz] = useState(0);
+
   const onTelemetry = useCallback(t => {
     if (!t || !t.keyId) return;
+    const now = performance.now();
+    const win = telemetryRateWindowRef.current;
+    win.push(now);
+    while (win.length && now - win[0] > 1000) win.shift();
+    if (now - telemetryRateLastUpdateRef.current > 200) {
+      telemetryRateLastUpdateRef.current = now;
+      setLiveReportHz(win.length);
+    }
     // Real HID travel wins over demo animation when it is available.
     // Each 0x05/0x1B packet updates one key, so merge instead of replacing.
     setDepths(prev => {
@@ -1879,7 +1969,7 @@ export default function App() {
                             split={split} setSplit={setSplit} press={press} setPress={setPress}
                             rel={rel} setRel={setRel} connected={connected} dSend={dSend} selectedKeys={selKeys}
                             rtPressByIdx={rtPressByIdx} rtLiftByIdx={rtLiftByIdx}/>,
-                  <PerfCard pollingCode={pollCode} setPollingCode={setPollCode} connected={connected} dSend={dSend}/>,
+                  <PerfCard pollingCode={pollCode} setPollingCode={setPollCode} connected={connected} send={send} liveReportHz={liveReportHz}/>,
                 ].map((card,i) => (
                   <div key={i} style={{ background:C.surf, borderRadius:8,
                     border:`1px solid ${C.bord}`, padding:16 }}>{card}</div>
