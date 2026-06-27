@@ -274,39 +274,58 @@ const FN_SPECIAL = {
   VOL_MUTE: 0xF7, VOL_DOWN: 0xF8, VOL_UP: 0xF9,
   RGB_DEC: 0xFA, RGB_INC: 0xFB, P1: 0xFC, P2: 0xFD, P3: 0xFE, P4: 0xFF,
 };
+const FN_UI_ONLY = {
+  BT1: 'ui:bt1', BT2: 'ui:bt2', BT3: 'ui:bt3', WIRELESS_24G: 'ui:24g',
+  SIRI: 'ui:siri', MAC_WIN: 'ui:macwin', RGB_MODE: 'ui:rgbmode', RGB_TOGGLE: 'ui:rgbtoggle',
+  LIGHT_DEC: 'ui:lightdec', LIGHT_INC: 'ui:lightinc', BATTERY: 'ui:battery',
+};
 const FN_SPECIAL_LABEL = {
   [FN_SPECIAL.LOCK]: 'Key Lock', [FN_SPECIAL.FN1]: 'Fn 1', [FN_SPECIAL.CYCLE]: 'Cycle',
   [FN_SPECIAL.MEDIA_PREV]: '◀◀', [FN_SPECIAL.MEDIA_PLAY]: '▶Ⅱ', [FN_SPECIAL.MEDIA_NEXT]: '▶▶',
-  [FN_SPECIAL.VOL_MUTE]: '🔇', [FN_SPECIAL.VOL_DOWN]: 'Vol −', [FN_SPECIAL.VOL_UP]: 'Vol +',
+  [FN_SPECIAL.VOL_MUTE]: 'Mute', [FN_SPECIAL.VOL_DOWN]: 'Vol −', [FN_SPECIAL.VOL_UP]: 'Vol +',
   [FN_SPECIAL.RGB_DEC]: 'RGB −', [FN_SPECIAL.RGB_INC]: 'RGB +',
   [FN_SPECIAL.P1]: 'P1', [FN_SPECIAL.P2]: 'P2', [FN_SPECIAL.P3]: 'P3', [FN_SPECIAL.P4]: 'P4',
+  [FN_UI_ONLY.BT1]: 'BT 1', [FN_UI_ONLY.BT2]: 'BT 2', [FN_UI_ONLY.BT3]: 'BT 3', [FN_UI_ONLY.WIRELESS_24G]: '2.4G',
+  [FN_UI_ONLY.SIRI]: 'Siri', [FN_UI_ONLY.MAC_WIN]: 'Mac/Win', [FN_UI_ONLY.RGB_MODE]: 'RGB Mode', [FN_UI_ONLY.RGB_TOGGLE]: 'RGB',
+  [FN_UI_ONLY.LIGHT_DEC]: 'Light −', [FN_UI_ONLY.LIGHT_INC]: 'Light +', [FN_UI_ONLY.BATTERY]: 'Battery',
 };
+// FUN60 stock Fn layer from the user manual + user video reference.
+// Normal HID keys are write-safe. FN_UI_ONLY labels show stock vendor shortcuts
+// from the PDF/video, but write as 0 until their real vendor bytes are captured.
+// Notes from the video pass:
+// - Esc has no Fn function. Leave it unmapped so it only shows the base Esc key.
+// - Number row is plain F1-F12 only; do not show media/volume overlays on F7-F10.
+// - Space is battery check.
 const DEFAULT_FN1 = {
-  esc:{code:HID.GRAVE,label:'`'}, k1:{code:HID.F1,label:'F1'}, k2:{code:HID.F2,label:'F2'}, k3:{code:HID.F3,label:'F3'},
-  k4:{code:HID.F4,label:'F4'}, k5:{code:HID.F5,label:'F5'}, k6:{code:HID.F6,label:'F6'}, k7:{code:HID.F7,label:'F7'},
-  k8:{code:HID.F8,label:'F8'}, k9:{code:HID.F9,label:'F9'}, k0:{code:HID.F10,label:'F10'}, minus:{code:HID.F11,label:'F11'},
-  equal:{code:HID.F12,label:'F12'}, bksp:{code:HID.DEL,label:'Del'},
-  tab:{code:HID.PRTSC,label:'Prt Sc'}, q:{code:HID.HOME,label:'Home'}, w:{code:HID.UP,label:'↑'}, e:{code:HID.END,label:'End'},
-  r:{code:HID.PGUP,label:'Pg Up'}, i:{code:HID.INS,label:'Ins'}, o:{code:FN_SPECIAL.P1,label:'P1'}, p:{code:FN_SPECIAL.P2,label:'P2'},
-  lbr:{code:FN_SPECIAL.P3,label:'P3'}, rbr:{code:FN_SPECIAL.P4,label:'P4'},
-  a:{code:HID.LEFT,label:'←'}, s:{code:HID.DOWN,label:'↓'}, d:{code:HID.RIGHT,label:'→'}, f:{code:HID.PGDN,label:'Pg Dn'},
-  h:{code:FN_SPECIAL.MEDIA_PREV,label:'◀◀'}, j:{code:FN_SPECIAL.MEDIA_PLAY,label:'▶Ⅱ'}, k:{code:FN_SPECIAL.MEDIA_NEXT,label:'▶▶'},
-  l:{code:FN_SPECIAL.RGB_DEC,label:'RGB −'}, semi:{code:FN_SPECIAL.RGB_INC,label:'RGB +'}, ent:{code:FN_SPECIAL.CYCLE,label:'Cycle'},
-  lsh:{code:HID.LSHIFT,label:'L-Shift'}, n:{code:FN_SPECIAL.VOL_MUTE,label:'🔇'}, m:{code:FN_SPECIAL.VOL_DOWN,label:'Vol −'},
-  com:{code:FN_SPECIAL.VOL_UP,label:'Vol +'}, dot:{code:HID.UP,label:'↑'}, rsh:{code:HID.RSHIFT,label:'R-Shift'},
-  lctl:{code:HID.LCTRL,label:'L-Ctrl'}, lwin:{code:FN_SPECIAL.LOCK,label:'Key Lock'}, lalt:{code:HID.LALT,label:'L-Alt'},
-  spc:{code:HID.SPACE,label:'Spacebar'}, ralt:{code:HID.LEFT,label:'←'}, menu:{code:HID.DOWN,label:'↓'}, rctl:{code:HID.RIGHT,label:'→'},
+  k1:{code:HID.F1,label:'F1'}, k2:{code:HID.F2,label:'F2'}, k3:{code:HID.F3,label:'F3'}, k4:{code:HID.F4,label:'F4'},
+  k5:{code:HID.F5,label:'F5'}, k6:{code:HID.F6,label:'F6'}, k7:{code:HID.F7,label:'F7'}, k8:{code:HID.F8,label:'F8'},
+  k9:{code:HID.F9,label:'F9'}, k0:{code:HID.F10,label:'F10'}, minus:{code:HID.F11,label:'F11'}, equal:{code:HID.F12,label:'F12'},
+  bksp:{code:HID.DEL,label:'Delete'},
+
+  e:{code:FN_UI_ONLY.BT1,label:'BT 1'}, r:{code:FN_UI_ONLY.BT2,label:'BT 2'}, t:{code:FN_UI_ONLY.BT3,label:'BT 3'},
+  y:{code:FN_UI_ONLY.WIRELESS_24G,label:'2.4G'}, p:{code:HID.PRTSC,label:'PrtSc'}, i:{code:HID.INS,label:'Insert'},
+
+  w:{code:HID.UP,label:'↑'}, a:{code:HID.LEFT,label:'←'}, s:{code:HID.DOWN,label:'↓'}, d:{code:HID.RIGHT,label:'→'},
+
+  semi:{code:FN_UI_ONLY.LIGHT_DEC,label:'Light −'}, apos:{code:FN_UI_ONLY.LIGHT_INC,label:'Light +'}, bsl:{code:FN_UI_ONLY.RGB_TOGGLE,label:'RGB'},
+  spc:{code:FN_UI_ONLY.BATTERY,label:'Battery'}, lwin:{code:FN_SPECIAL.LOCK,label:'Win Lock'},
+  ralt:{code:FN_UI_ONLY.MAC_WIN,label:'Mac/Win'},
 };
 const FN_ACTIONS = [
   {group:'Navigation', items:[['None',HID.NONE],['Esc',HID.ESC],['`',HID.GRAVE],['Del',HID.DEL],['Ins',HID.INS],['Home',HID.HOME],['End',HID.END],['Pg Up',HID.PGUP],['Pg Dn',HID.PGDN],['↑',HID.UP],['↓',HID.DOWN],['←',HID.LEFT],['→',HID.RIGHT]]},
   {group:'Function', items:[['F1',HID.F1],['F2',HID.F2],['F3',HID.F3],['F4',HID.F4],['F5',HID.F5],['F6',HID.F6],['F7',HID.F7],['F8',HID.F8],['F9',HID.F9],['F10',HID.F10],['F11',HID.F11],['F12',HID.F12]]},
   {group:'Media / Profile', items:[['Prt Sc',HID.PRTSC],['Prev',FN_SPECIAL.MEDIA_PREV],['Play',FN_SPECIAL.MEDIA_PLAY],['Next',FN_SPECIAL.MEDIA_NEXT],['Mute',FN_SPECIAL.VOL_MUTE],['Vol −',FN_SPECIAL.VOL_DOWN],['Vol +',FN_SPECIAL.VOL_UP],['P1',FN_SPECIAL.P1],['P2',FN_SPECIAL.P2],['P3',FN_SPECIAL.P3],['P4',FN_SPECIAL.P4],['Cycle',FN_SPECIAL.CYCLE],['Fn 1',FN_SPECIAL.FN1],['Key Lock',FN_SPECIAL.LOCK]]},
+  {group:'FUN60 Manual', items:[['BT 1',FN_UI_ONLY.BT1],['BT 2',FN_UI_ONLY.BT2],['BT 3',FN_UI_ONLY.BT3],['2.4G',FN_UI_ONLY.WIRELESS_24G],['RGB Mode',FN_UI_ONLY.RGB_MODE],['RGB',FN_UI_ONLY.RGB_TOGGLE],['Light −',FN_UI_ONLY.LIGHT_DEC],['Light +',FN_UI_ONLY.LIGHT_INC],['Battery',FN_UI_ONLY.BATTERY],['Mac/Win',FN_UI_ONLY.MAC_WIN]]},
 ];
-function fnLabelFromCode(code) { return FN_SPECIAL_LABEL[code] || HID_LABEL[code] || (code ? `0x${code.toString(16).padStart(2,'0')}` : ''); }
+function fnLabelFromCode(code) { return FN_SPECIAL_LABEL[code] || HID_LABEL[code] || (code ? `0x${Number(code).toString(16).padStart(2,'0')}` : ''); }
 function cloneFnLayer(layer) { return Object.fromEntries(Object.entries(layer).map(([k,v]) => [k, {...v}])); }
 function fnLayerToBytes(layer) {
   const out = new Uint8Array(ALL_KEYS.length);
-  ALL_KEYS.forEach((key, i) => { out[i] = layer[key.id]?.code ?? 0; });
+  ALL_KEYS.forEach((key, i) => {
+    const code = layer[key.id]?.code ?? 0;
+    // UI-only vendor shortcuts from the manual are labels until captured, so do not write fake bytes.
+    out[i] = Number.isInteger(code) && code >= 0 && code <= 255 ? code : 0;
+  });
   return out;
 }
 function bytesToFnLayer(bytes) {
@@ -1385,7 +1404,7 @@ function RemapPanel({ selectedKeys, activeLayer, fnLayer, setFnLayer, connected,
         </div>
       </div>
       <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-        {["Navigation","Function","Media / Profile"].map(c => (
+        {["Navigation","Function","Media / Profile","FUN60 Manual"].map(c => (
           <button key={c} onClick={()=>setCat(c)} style={{
             padding:"7px 11px", border:`1px solid ${cat===c?C.accent:C.bord}`,
             borderRadius:5, background:cat===c?C.activeBg:"transparent",
@@ -1417,7 +1436,7 @@ function RemapPanel({ selectedKeys, activeLayer, fnLayer, setFnLayer, connected,
       ))}
       {targetLayer && <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:7, background:C.over, border:`1px solid ${C.bord}`, color:C.muted, fontSize:12 }}>
         <span style={{ color:C.accent, fontWeight:900 }}>Wire format:</span>
-        <span>safe chunked <span style={{ fontFamily:MONO }}>SET_FN 0x10</span>, layer id 1, max 56 bytes per chunk.</span>
+        <span>manual stock Fn labels. Write-safe for HID keys; vendor actions need capture. <span style={{ fontFamily:MONO }}>SET_FN 0x10</span>, layer id 1.</span>
       </div>}
       {msg && <div style={{ fontSize:12, color:msg.includes("failed")?C.red:C.green, fontWeight:800 }}>{msg}</div>}
     </div>
