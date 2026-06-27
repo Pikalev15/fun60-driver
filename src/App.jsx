@@ -71,7 +71,7 @@ function pkt(op, args = []) {
 const CMD = {
   getInfor:    ()                         => pkt(0x8F),
   getProfile:  ()                         => pkt(0x84),
-  setProfile:  p                          => pkt(0x04, [p]),
+  setProfile:  p                          => pkt(0x04, [p & 0x03]),
   getPolling:  ()                         => pkt(0x83),
   setPolling:  code                       => pkt(0x03, [0, code]),
   getLedOn:    ()                         => pkt(0x85),
@@ -109,6 +109,16 @@ const CMD = {
   },
   // Set mode for ALL keys at once (0x1D)
   setGlobalMode: mode => pkt(0x1D, [mode]),
+  // Fn layers use the same safe chunked layout documented for SET_KEYMATRIX / SET_FN:
+  // [0] cmd, [1] layer_id, [2] chunk_index, [8..63] payload.
+  getFn: (layer = 1, chunk = 0) => {
+    const r = new Uint8Array(RL); r[0]=0x90; r[1]=layer & 0x05; r[2]=chunk & 0x0F; return bit7(r);
+  },
+  setFnChunk: (layer = 1, chunk = 0, payload = []) => {
+    const r = new Uint8Array(RL); r[0]=0x10; r[1]=layer & 0x05; r[2]=chunk & 0x0F;
+    Array.from(payload).slice(0, 56).forEach((v, i) => { r[8+i] = v & 0xFF; });
+    return bit7(r);
+  },
 };
 
 function parseInfor(r) {
@@ -236,6 +246,77 @@ const KEY_CODE_TO_ID = {
   ControlLeft:"lctl", MetaLeft:"lwin", AltLeft:"lalt", Space:"spc",
   AltRight:"ralt", ContextMenu:"menu", ControlRight:"rctl",
 };
+
+
+
+// USB HID keyboard usages for the first real Fn-layer pass.
+// The stock firmware stores keymaps/Fn layers in chunked 56-byte payloads using
+// SET_FN (0x10) / GET_FN (0x90). We keep the UI map as keyId -> action, then
+// serialize into matrix/mag order when writing.
+const HID = {
+  NONE: 0x00, A:0x04, B:0x05, C:0x06, D:0x07, E:0x08, F:0x09, G:0x0A, H:0x0B,
+  I:0x0C, J:0x0D, K:0x0E, L:0x0F, M:0x10, N:0x11, O:0x12, P:0x13, Q:0x14,
+  R:0x15, S:0x16, T:0x17, U:0x18, V:0x19, W:0x1A, X:0x1B, Y:0x1C, Z:0x1D,
+  N1:0x1E, N2:0x1F, N3:0x20, N4:0x21, N5:0x22, N6:0x23, N7:0x24, N8:0x25,
+  N9:0x26, N0:0x27, ENTER:0x28, ESC:0x29, BSPC:0x2A, TAB:0x2B, SPACE:0x2C,
+  MINUS:0x2D, EQUAL:0x2E, LBR:0x2F, RBR:0x30, BSL:0x31, SEMI:0x33, APOS:0x34,
+  GRAVE:0x35, COMMA:0x36, DOT:0x37, SLASH:0x38, CAPS:0x39,
+  F1:0x3A, F2:0x3B, F3:0x3C, F4:0x3D, F5:0x3E, F6:0x3F, F7:0x40, F8:0x41,
+  F9:0x42, F10:0x43, F11:0x44, F12:0x45, PRTSC:0x46, INS:0x49, HOME:0x4A,
+  PGUP:0x4B, DEL:0x4C, END:0x4D, PGDN:0x4E, RIGHT:0x4F, LEFT:0x50, DOWN:0x51,
+  UP:0x52, LCTRL:0xE0, LSHIFT:0xE1, LALT:0xE2, LGUI:0xE3, RCTRL:0xE4, RSHIFT:0xE5,
+  RALT:0xE6, RGUI:0xE7,
+};
+const HID_LABEL = Object.fromEntries(Object.entries(HID).map(([name, code]) => [code, name.replace(/^N(\d)$/,'$1')]));
+const FN_SPECIAL = {
+  LOCK: 0xF1, FN1: 0xF2, CYCLE: 0xF3,
+  MEDIA_PREV: 0xF4, MEDIA_PLAY: 0xF5, MEDIA_NEXT: 0xF6,
+  VOL_MUTE: 0xF7, VOL_DOWN: 0xF8, VOL_UP: 0xF9,
+  RGB_DEC: 0xFA, RGB_INC: 0xFB, P1: 0xFC, P2: 0xFD, P3: 0xFE, P4: 0xFF,
+};
+const FN_SPECIAL_LABEL = {
+  [FN_SPECIAL.LOCK]: 'Key Lock', [FN_SPECIAL.FN1]: 'Fn 1', [FN_SPECIAL.CYCLE]: 'Cycle',
+  [FN_SPECIAL.MEDIA_PREV]: '◀◀', [FN_SPECIAL.MEDIA_PLAY]: '▶Ⅱ', [FN_SPECIAL.MEDIA_NEXT]: '▶▶',
+  [FN_SPECIAL.VOL_MUTE]: '🔇', [FN_SPECIAL.VOL_DOWN]: 'Vol −', [FN_SPECIAL.VOL_UP]: 'Vol +',
+  [FN_SPECIAL.RGB_DEC]: 'RGB −', [FN_SPECIAL.RGB_INC]: 'RGB +',
+  [FN_SPECIAL.P1]: 'P1', [FN_SPECIAL.P2]: 'P2', [FN_SPECIAL.P3]: 'P3', [FN_SPECIAL.P4]: 'P4',
+};
+const DEFAULT_FN1 = {
+  esc:{code:HID.GRAVE,label:'`'}, k1:{code:HID.F1,label:'F1'}, k2:{code:HID.F2,label:'F2'}, k3:{code:HID.F3,label:'F3'},
+  k4:{code:HID.F4,label:'F4'}, k5:{code:HID.F5,label:'F5'}, k6:{code:HID.F6,label:'F6'}, k7:{code:HID.F7,label:'F7'},
+  k8:{code:HID.F8,label:'F8'}, k9:{code:HID.F9,label:'F9'}, k0:{code:HID.F10,label:'F10'}, minus:{code:HID.F11,label:'F11'},
+  equal:{code:HID.F12,label:'F12'}, bksp:{code:HID.DEL,label:'Del'},
+  tab:{code:HID.PRTSC,label:'Prt Sc'}, q:{code:HID.HOME,label:'Home'}, w:{code:HID.UP,label:'↑'}, e:{code:HID.END,label:'End'},
+  r:{code:HID.PGUP,label:'Pg Up'}, i:{code:HID.INS,label:'Ins'}, o:{code:FN_SPECIAL.P1,label:'P1'}, p:{code:FN_SPECIAL.P2,label:'P2'},
+  lbr:{code:FN_SPECIAL.P3,label:'P3'}, rbr:{code:FN_SPECIAL.P4,label:'P4'},
+  a:{code:HID.LEFT,label:'←'}, s:{code:HID.DOWN,label:'↓'}, d:{code:HID.RIGHT,label:'→'}, f:{code:HID.PGDN,label:'Pg Dn'},
+  h:{code:FN_SPECIAL.MEDIA_PREV,label:'◀◀'}, j:{code:FN_SPECIAL.MEDIA_PLAY,label:'▶Ⅱ'}, k:{code:FN_SPECIAL.MEDIA_NEXT,label:'▶▶'},
+  l:{code:FN_SPECIAL.RGB_DEC,label:'RGB −'}, semi:{code:FN_SPECIAL.RGB_INC,label:'RGB +'}, ent:{code:FN_SPECIAL.CYCLE,label:'Cycle'},
+  lsh:{code:HID.LSHIFT,label:'L-Shift'}, n:{code:FN_SPECIAL.VOL_MUTE,label:'🔇'}, m:{code:FN_SPECIAL.VOL_DOWN,label:'Vol −'},
+  com:{code:FN_SPECIAL.VOL_UP,label:'Vol +'}, dot:{code:HID.UP,label:'↑'}, rsh:{code:HID.RSHIFT,label:'R-Shift'},
+  lctl:{code:HID.LCTRL,label:'L-Ctrl'}, lwin:{code:FN_SPECIAL.LOCK,label:'Key Lock'}, lalt:{code:HID.LALT,label:'L-Alt'},
+  spc:{code:HID.SPACE,label:'Spacebar'}, ralt:{code:HID.LEFT,label:'←'}, menu:{code:HID.DOWN,label:'↓'}, rctl:{code:HID.RIGHT,label:'→'},
+};
+const FN_ACTIONS = [
+  {group:'Navigation', items:[['None',HID.NONE],['Esc',HID.ESC],['`',HID.GRAVE],['Del',HID.DEL],['Ins',HID.INS],['Home',HID.HOME],['End',HID.END],['Pg Up',HID.PGUP],['Pg Dn',HID.PGDN],['↑',HID.UP],['↓',HID.DOWN],['←',HID.LEFT],['→',HID.RIGHT]]},
+  {group:'Function', items:[['F1',HID.F1],['F2',HID.F2],['F3',HID.F3],['F4',HID.F4],['F5',HID.F5],['F6',HID.F6],['F7',HID.F7],['F8',HID.F8],['F9',HID.F9],['F10',HID.F10],['F11',HID.F11],['F12',HID.F12]]},
+  {group:'Media / Profile', items:[['Prt Sc',HID.PRTSC],['Prev',FN_SPECIAL.MEDIA_PREV],['Play',FN_SPECIAL.MEDIA_PLAY],['Next',FN_SPECIAL.MEDIA_NEXT],['Mute',FN_SPECIAL.VOL_MUTE],['Vol −',FN_SPECIAL.VOL_DOWN],['Vol +',FN_SPECIAL.VOL_UP],['P1',FN_SPECIAL.P1],['P2',FN_SPECIAL.P2],['P3',FN_SPECIAL.P3],['P4',FN_SPECIAL.P4],['Cycle',FN_SPECIAL.CYCLE],['Fn 1',FN_SPECIAL.FN1],['Key Lock',FN_SPECIAL.LOCK]]},
+];
+function fnLabelFromCode(code) { return FN_SPECIAL_LABEL[code] || HID_LABEL[code] || (code ? `0x${code.toString(16).padStart(2,'0')}` : ''); }
+function cloneFnLayer(layer) { return Object.fromEntries(Object.entries(layer).map(([k,v]) => [k, {...v}])); }
+function fnLayerToBytes(layer) {
+  const out = new Uint8Array(ALL_KEYS.length);
+  ALL_KEYS.forEach((key, i) => { out[i] = layer[key.id]?.code ?? 0; });
+  return out;
+}
+function bytesToFnLayer(bytes) {
+  const next = {};
+  ALL_KEYS.forEach((key, i) => {
+    const code = bytes?.[i] ?? 0;
+    if (code) next[key.id] = { code, label: fnLabelFromCode(code) };
+  });
+  return next;
+}
 
 /* ─────────────────────────────────────────────────────────────────────────────
    DESIGN TOKENS  (extracted from Wootility 5.3.1 source)
@@ -437,7 +518,7 @@ function useKeyboard({ onSettings, onTelemetry }) {
     liveDev.current = null; dev.current = null; setStatus("idle"); setInfo(null); setTelemetry("off");
   }, [send]);
 
-  return { hidOK, status, info, err, telemetry, telemetryFmt, connect, disconnect, send, dSend, openTelemetry };
+  return { hidOK, status, info, err, telemetry, telemetryFmt, connect, disconnect, send, dSend, openTelemetry, readSettings };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -617,7 +698,7 @@ function sectionKeyColor(section, key, d, sel, hov_, apByIdx, globalAp) {
   return hov_ ? C.keyHv : C.key;
 }
 
-function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSimPress, onSimRelease, section, apByIdx, globalAp, rtPressByIdx, globalSens }) {
+function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSimPress, onSimRelease, section, apByIdx, globalAp, rtPressByIdx, globalSens, labelMap }) {
   const [hov, setHov] = useState(null);
   const showApLabels = section === "ap";
   const showRtLabels = section === "rt";
@@ -639,6 +720,7 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSimPress, onSimRel
               const sel = selectedKeys.has(key.id);
               const hov_ = hov === key.id;
               const bg  = sectionKeyColor(section, key, d, sel, hov_, apByIdx, globalAp);
+              const displayLabel = labelMap?.[key.id] ?? key.l;
               const keyApMm = key.magIdx >= 0 && apByIdx?.[key.magIdx] != null ? cmm(apByIdx[key.magIdx]) : globalAp;
               const keyRtMm = key.magIdx >= 0 && rtPressByIdx?.[key.magIdx] != null ? cmm(rtPressByIdx[key.magIdx]) : globalSens;
               const labelVal = showApLabels ? keyApMm : keyRtMm;
@@ -699,7 +781,7 @@ function KeyboardViz({ keyDepths, selectedKeys, onKeyClick, onSimPress, onSimRel
                     fontSize:key.u>=1.5?9:10, fontFamily:FONT, fontWeight:700,
                     color: sel?C.selectedTxt:(section==="quick"?"#fff":C.keyTxt), userSelect:"none", lineHeight:1,
                     marginTop: showValueLabels ? 4 : 0,
-                  }}>{key.l}</span>
+                  }}>{displayLabel}</span>
                   {d > 0.08 && <span style={{
                     fontSize:6.5, fontFamily:MONO, lineHeight:1, marginTop:1,
                     color: sel?C.selectedSub:C.depthTxt,
@@ -1269,39 +1351,75 @@ function RGBPanel({ ledOn, setLedOn, ledMode, setLedMode, ledR, setLedR, ledG, s
   );
 }
 
-function RemapPanel({ selectedKeys }) {
-  const [cat, setCat] = useState("Standard");
-  const cats = ["Standard","Modifier","Media","Macro","Layer","Disabled"];
+function RemapPanel({ selectedKeys, activeLayer, fnLayer, setFnLayer, connected, send, writeFnLayer }) {
+  const [cat, setCat] = useState("Function");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
   const selArr = [...selectedKeys];
+  const targetLayer = activeLayer === "fn1";
+
+  const assign = async (label, code) => {
+    if (!targetLayer || selArr.length === 0) return;
+    const next = cloneFnLayer(fnLayer);
+    selArr.forEach(id => {
+      if (code === HID.NONE) delete next[id];
+      else next[id] = { code, label };
+    });
+    setFnLayer(next);
+    setBusy(true); setMsg("Saving Fn Layer 1…");
+    try {
+      if (connected) await writeFnLayer(1, next);
+      setMsg(connected ? "Fn Layer 1 saved to keyboard." : "Fn Layer 1 changed in UI only. Connect keyboard to write it.");
+    } catch (e) {
+      console.warn("Fn layer write failed", e);
+      setMsg(`Write failed: ${e.message || e}`);
+    } finally { setBusy(false); }
+  };
+
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-      <div style={{ fontSize:13, fontWeight:700, color:C.txt }}>Key Remap</div>
-      <div style={{ fontSize:12, color:C.muted }}>
-        {selectedKeys.size===0 ? "Select a key above to remap it." : `Remapping ${selectedKeys.size} key${selectedKeys.size>1?"s":""}.`}
+    <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+      <div>
+        <div style={{ fontSize:13, fontWeight:700, color:C.txt }}>Fn Layer Remap</div>
+        <div style={{ fontSize:12, color:C.muted, marginTop:3 }}>
+          {targetLayer ? "Select keys, then assign what they output while Fn is held." : "Switch to Fn Layer 1 on the left to edit the real Fn layer."}
+        </div>
       </div>
-      {selectedKeys.size>0 && <>
-        <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-          {cats.map(c => (
-            <button key={c} onClick={()=>setCat(c)} style={{
-              padding:"5px 10px", border:`1px solid ${cat===c?C.accent:C.bord}`,
-              borderRadius:4, background:cat===c?C.activeBg:"transparent",
-              color:cat===c?C.accent:C.muted, fontSize:11, fontFamily:FONT, cursor:"pointer",
-            }}>{c}</button>
+      <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+        {["Navigation","Function","Media / Profile"].map(c => (
+          <button key={c} onClick={()=>setCat(c)} style={{
+            padding:"7px 11px", border:`1px solid ${cat===c?C.accent:C.bord}`,
+            borderRadius:5, background:cat===c?C.activeBg:"transparent",
+            color:cat===c?C.accent:C.muted, fontSize:11, fontWeight:800, fontFamily:FONT, cursor:"pointer",
+          }}>{c}</button>
+        ))}
+        <span style={{ marginLeft:"auto", fontSize:11, color: connected ? C.green : C.muted, fontFamily:MONO }}>
+          {connected ? "SET_FN 0x10 ready" : "demo only"}
+        </span>
+      </div>
+      <div style={{ padding:"12px 14px", background:C.over, borderRadius:7, border:`1px solid ${C.bord}` }}>
+        <div style={{ fontSize:10, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", fontWeight:900, marginBottom:8 }}>
+          {selArr.length ? "Selected" : "No key selected"}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", color:C.sub, fontSize:12 }}>
+          {selArr.length ? selArr.map(id => <span key={id} style={{ padding:"4px 7px", borderRadius:4, background:C.surf, color:C.accent, fontFamily:MONO, fontWeight:800 }}>{ALL_KEYS.find(k=>k.id===id)?.l || id}</span>) : "Select one or more keys on the keyboard preview."}
+        </div>
+      </div>
+      {targetLayer && selArr.length > 0 && FN_ACTIONS.filter(g => g.group===cat).map(group => (
+        <div key={group.group} style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(74px,1fr))", gap:8 }}>
+          {group.items.map(([label, code]) => (
+            <button key={`${label}-${code}`} disabled={busy} onClick={()=>assign(label, code)} style={{
+              minHeight:42, padding:"8px 9px", borderRadius:6, border:`1px solid ${C.bord}`,
+              background:C.surf, color:C.txt, fontFamily:FONT, fontSize:12, fontWeight:850,
+              cursor:busy?"wait":"pointer", boxShadow:"inset 0 1px 0 rgba(255,255,255,.04)",
+            }}>{label}</button>
           ))}
         </div>
-        <div style={{ padding:"10px 14px", background:C.over, borderRadius:6,
-          border:`1px solid ${C.bord}`, fontSize:12, color:C.muted,
-          display:"flex", alignItems:"center", gap:8 }}>
-          <span style={{ color:C.accent, fontFamily:MONO, fontWeight:700 }}>
-            {selArr.map(k=>ALL_KEYS.find(x=>x.id===k)?.l||k).join(", ")}
-          </span>
-          <span>→</span>
-          <span>{cat==="Disabled"?"[disabled]":`[${cat}]`}</span>
-          <button style={{ marginLeft:"auto", padding:"4px 11px",
-            background:C.accent, color:C.atxt, border:"none", borderRadius:4,
-            fontSize:11, fontWeight:700, fontFamily:FONT, cursor:"pointer" }}>Assign</button>
-        </div>
-      </>}
+      ))}
+      {targetLayer && <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:7, background:C.over, border:`1px solid ${C.bord}`, color:C.muted, fontSize:12 }}>
+        <span style={{ color:C.accent, fontWeight:900 }}>Wire format:</span>
+        <span>safe chunked <span style={{ fontFamily:MONO }}>SET_FN 0x10</span>, layer id 1, max 56 bytes per chunk.</span>
+      </div>}
+      {msg && <div style={{ fontSize:12, color:msg.includes("failed")?C.red:C.green, fontWeight:800 }}>{msg}</div>}
     </div>
   );
 }
@@ -2045,6 +2163,7 @@ export default function App() {
   const [demo,    setDemo]      = useState(false);
   const [activeDevice, setActiveDevice] = useState("fun60");
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
+  const [profileSwitching, setProfileSwitching] = useState(false);
 
   // Hardware state — defaults match factory firmware
   const [ap,       setAp]       = useState(2.00);
@@ -2062,6 +2181,9 @@ export default function App() {
   const [ledG,     setLedG]     = useState(255);
   const [ledB,     setLedB]     = useState(255);
   const [socdPairs, setSocdPairs] = useState([]); // [[keyId1, keyId2], ...] — UI-only grouping
+  const [activeLayer, setActiveLayer] = useState("main");
+  const [fnLayer, setFnLayer] = useState(() => cloneFnLayer(DEFAULT_FN1));
+  const [fnLayerStatus, setFnLayerStatus] = useState("default");
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
@@ -2141,7 +2263,7 @@ export default function App() {
     });
   }, []);
 
-  const { hidOK, status, info, err, telemetry, telemetryFmt, connect, disconnect, send, dSend, openTelemetry } = useKeyboard({ onSettings, onTelemetry });
+  const { hidOK, status, info, err, telemetry, telemetryFmt, connect, disconnect, send, dSend, openTelemetry, readSettings } = useKeyboard({ onSettings, onTelemetry });
   const connected = status === "connected";
 
   // Demo animation: simulated key travel driven by physical or pointer presses.
@@ -2226,10 +2348,77 @@ export default function App() {
     setSelKeys(p => { const s=new Set(p); s.has(id)?s.delete(id):s.add(id); return s; });
   }, []);
 
-  const handleProfileChange = i => {
-    setProfile(i);
+  const readFnLayer = useCallback(async (layer = 1) => {
+    // GET_FN exists, but readback layout differs slightly across firmware. Try
+    // the documented chunk indexes and accept either echoed payload-at-8 or raw.
+    const chunks = [];
+    for (let chunk = 0; chunk < 2; chunk++) {
+      const r = await send(CMD.getFn(layer, chunk));
+      const body = r?.[0] === 0x90 ? Array.from(r.slice(8, 64)) : Array.from(r || []);
+      chunks.push(...body.slice(0, 56));
+      await sleep(20);
+    }
+    const parsed = bytesToFnLayer(chunks);
+    if (Object.keys(parsed).length) {
+      setFnLayer(prev => ({ ...prev, ...parsed }));
+      setFnLayerStatus("read from keyboard");
+    }
+    return parsed;
+  }, [send]);
+
+  const writeFnLayer = useCallback(async (layer = 1, nextLayer = fnLayer) => {
+    const bytes = Array.from(fnLayerToBytes(nextLayer));
+    const chunks = [];
+    for (let i = 0; i < bytes.length; i += 56) chunks.push(bytes.slice(i, i + 56));
+    for (let chunk = 0; chunk < chunks.length; chunk++) {
+      await send(CMD.setFnChunk(layer, chunk, chunks[chunk]));
+      await sleep(70);
+    }
+    setFnLayerStatus("saved to keyboard");
+  }, [send, fnLayer]);
+
+  const switchLayer = useCallback(async layer => {
+    setActiveLayer(layer);
+    setSelKeys(new Set());
+    if (layer === "fn1" && connected) {
+      setFnLayerStatus("reading…");
+      try { await readFnLayer(1); }
+      catch (e) { console.warn("GET_FN failed", e); setFnLayerStatus("using local default"); }
+    }
+  }, [connected, readFnLayer]);
+
+  const handleProfileChange = async i => {
+    const slot = Math.max(0, Math.min(3, Number(i) || 0));
+    setProfile(slot);
     setProfileMenuOpen(false);
-    if (connected) dSend("profile", CMD.setProfile(i), 0);
+
+    // Local/demo mode: just switch the visible active profile.
+    if (!connected) return;
+
+    setProfileSwitching(true);
+    try {
+      // SET_PROFILE = 0x04. GET_PROFILE = 0x84. The slot is 0–3.
+      // After switching, firmware reloads that slot's config, so immediately
+      // read everything back and apply it to the UI.
+      await send(CMD.setProfile(slot));
+      await sleep(120);
+
+      const reply = await send(CMD.getProfile());
+      const actual = (reply?.[1] ?? slot) & 0x03;
+      setProfile(actual);
+
+      const freshSettings = await readSettings();
+      onSettings(freshSettings);
+    } catch (e) {
+      console.warn("profile switch failed:", e);
+      // If the write/read fails, recover the real active slot when possible.
+      try {
+        const freshSettings = await readSettings();
+        onSettings(freshSettings);
+      } catch {}
+    } finally {
+      setProfileSwitching(false);
+    }
   };
 
   const addProfile = () => {
@@ -2353,6 +2542,7 @@ export default function App() {
           {/* floating top profile bar */}
           {!["settings","help"].includes(section) && <div style={{ height:82, flexShrink:0, position:"relative", display:"flex", justifyContent:"center", alignItems:"center", padding:"0 22px" }}>
             <ProfileDropdown profiles={profiles} activeProfile={profile} open={profileMenuOpen} onToggle={(v)=>setProfileMenuOpen(typeof v === "boolean" ? v : !profileMenuOpen)} onSelect={handleProfileChange} onNewProfile={addProfile} onEditProfile={setEditingProfile} onDuplicateProfile={duplicateProfile} onToggleInactive={toggleProfileInactive}/>
+            {profileSwitching && <span style={{ marginLeft:10, fontSize:11, color:C.accent, fontWeight:800, fontFamily:MONO }}>switching…</span>}
             <div style={{ position:"absolute", right:20, display:"flex", alignItems:"center", gap:12 }}>
               <span style={{ color:C.bordHv, fontSize:18 }}>↶</span>
               <span style={{ color:C.bordHv, fontSize:18 }}>↷</span>
@@ -2378,13 +2568,16 @@ export default function App() {
                 <div style={{ alignSelf:"center" }}>
                   <div style={{ color:C.muted, fontSize:13, fontWeight:900, letterSpacing:".04em", marginBottom:8 }}>LAYERS <span style={{ opacity:.7 }}>ⓘ</span></div>
                   {[
-                    ["Main Layer", true],
-                    ["Fn Layer 1", false]
-                  ].map(([label,active]) => (
-                    <button key={label} style={{ width:"100%", marginBottom:8, padding:"12px 10px", borderRadius:6, border:`1px solid ${active?C.accent:"transparent"}`, background:active?C.activeBg:C.over, color:active?C.txt:C.muted, fontFamily:FONT, fontSize:12, fontWeight:900, display:"flex", justifyContent:"space-between", cursor:"pointer" }}>
-                      <span>{label}</span><span>⋮</span>
+                    ["main", "Main Layer"],
+                    ["fn1", "Fn Layer 1"]
+                  ].map(([id,label]) => {
+                    const active = activeLayer === id;
+                    return (
+                    <button key={id} onClick={() => switchLayer(id)} style={{ width:"100%", marginBottom:8, padding:"12px 10px", borderRadius:6, border:`1px solid ${active?C.accent:"transparent"}`, background:active?C.activeBg:C.over, color:active?C.txt:C.muted, fontFamily:FONT, fontSize:12, fontWeight:900, display:"flex", justifyContent:"space-between", cursor:"pointer" }}>
+                      <span>{label}</span><span>{id === "fn1" ? "Fn" : "⋮"}</span>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <div style={{ display:"flex", justifyContent:"center", alignItems:"center", minHeight:286, overflow:"visible" }}>
@@ -2394,7 +2587,8 @@ export default function App() {
                       onSimPress={id => setSimKey(id, true)}
                       onSimRelease={id => setSimKey(id, false)}
                       section={section} apByIdx={apByIdx} globalAp={ap}
-                      rtPressByIdx={rtPressByIdx} globalSens={sens}/>
+                      rtPressByIdx={rtPressByIdx} globalSens={sens}
+                      labelMap={activeLayer === "fn1" ? Object.fromEntries(Object.entries(fnLayer).map(([id, v]) => [id, v.label])) : null}/>
                   </div>
                 </div>
               </div>
@@ -2434,7 +2628,7 @@ export default function App() {
               {section!=="quick" && (
                 <div style={{ background:C.surf, borderRadius:8, border:`1px solid ${C.bord}`, overflow:"hidden", minHeight:370 }}>
                   <div style={{ height:54, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 20px", borderBottom:`1px solid ${C.bord}` }}>
-                    <div style={{ fontSize:18, fontWeight:900, color:C.txt }}>{section==="advanced" ? "Snappy Tappy (SOCD)" : NAV.find(n=>n.id===section)?.tip}</div>
+                    <div style={{ fontSize:18, fontWeight:900, color:C.txt }}>{section==="advanced" ? "Snappy Tappy (SOCD)" : section==="remap" ? (activeLayer === "fn1" ? "Fn Layer 1" : "Main Layer") : NAV.find(n=>n.id===section)?.tip}</div>
                     <div style={{ display:"flex", gap:8 }}>
                       <button style={{ padding:"7px 12px", border:"none", borderRadius:6, background:C.over, color:C.sub, fontSize:12, fontWeight:900, cursor:"pointer" }}>Cancel</button>
                       <button style={{ padding:"7px 12px", border:"none", borderRadius:6, background:selKeys.size?C.accent:"#282c30", color:selKeys.size?C.atxt:C.muted, fontSize:12, fontWeight:900, cursor:selKeys.size?"pointer":"default" }}>Continue</button>
@@ -2450,7 +2644,7 @@ export default function App() {
                       ledR={ledR} setLedR={setLedR} ledG={ledG} setLedG={setLedG}
                       ledB={ledB} setLedB={setLedB} ledSpeed={ledSpeed} setLedSpeed={setLedSpeed}
                       ledBri={ledBri} setLedBri={setLedBri} connected={connected} dSend={dSend}/>} 
-                    {section==="remap" && <RemapPanel selectedKeys={selKeys}/>} 
+                    {section==="remap" && <RemapPanel selectedKeys={selKeys} activeLayer={activeLayer} fnLayer={fnLayer} setFnLayer={setFnLayer} connected={connected} send={send} writeFnLayer={writeFnLayer}/>} 
                     {section==="advanced" && (
                       <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
                         <div>
