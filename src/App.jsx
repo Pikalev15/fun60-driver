@@ -3,8 +3,73 @@ import { useState, useEffect, useRef, useCallback } from "react";
 /* ─────────────────────────────────────────────────────────────────────────────
    PROTOCOL  (ry5088 — extracted from github.com/dot-agi/ry5088-flasher)
 ───────────────────────────────────────────────────────────────────────────── */
-const VID = 0x3151, PID = 0x5030, USAGE_PAGE = 0xFFFF, DEV_ID = 2307;
+const BASE_VID = 0x3151;
+const USAGE_PAGES = [0xFFFF, 0xFF00];
+const DEFAULT_EXPECTED_DEV_ID = 2307;
 const RL  = 64; // report length
+
+// Compatibility targets. FUN60 Pro uses the same RY5088/M1 V5 protocol family,
+// but reports PID 0x502d and may expose vendor HID usage page 0xFFFF instead of
+// only 0xFF00, so device selection must be model-aware instead of hardcoding 0x5030.
+const KEYBOARD_MODELS = [
+  {
+    id: "fun60-ultra",
+    name: "FUN60 Ultra TMR",
+    displayName: "MonsGeek FUN60 Ultra TMR",
+    tag: "PID 0x5030 · RY5088",
+    vid: BASE_VID,
+    pid: 0x5030,
+    usagePages: USAGE_PAGES,
+    usageConfig: 0x02,
+    usageInput: 0x01,
+    expectedDevId: DEFAULT_EXPECTED_DEV_ID,
+    keyCount: 61,
+    hasMagnetism: true,
+    hasSidelight: false,
+    protocolFamily: "m1v5-ry5088",
+    img: "⌨",
+    demo: false,
+  },
+  {
+    id: "fun60-pro",
+    name: "FUN60 Pro Compatibility",
+    displayName: "MonsGeek FUN60 Pro",
+    tag: "PID 0x502D · compat",
+    vid: BASE_VID,
+    pid: 0x502D,
+    usagePages: USAGE_PAGES,
+    usageConfig: 0x02,
+    usageInput: 0x01,
+    expectedDevId: null, // do not block if GET_INFOR dev_id differs by firmware build
+    keyCount: 61,
+    hasMagnetism: true,
+    hasSidelight: false,
+    protocolFamily: "m1v5-ry5088",
+    img: "▣",
+    demo: false,
+    compatibility: true,
+  },
+  {
+    id: "demo60",
+    name: "Demo FUN60 60HE",
+    displayName: "Demo FUN60 60HE",
+    tag: "DEMO",
+    demo: true,
+    img: "▥",
+  },
+];
+const DEVICE_OPTIONS = KEYBOARD_MODELS;
+const DEFAULT_KEYBOARD_MODEL = KEYBOARD_MODELS[0];
+
+function modelFilters(model, usage) {
+  if (!model?.vid || !model?.pid) return [];
+  const pages = model.usagePages?.length ? model.usagePages : USAGE_PAGES;
+  return pages.map(usagePage => ({ vendorId: model.vid, productId: model.pid, usagePage, usage }));
+}
+
+function matchesModel(device, model) {
+  return !!model?.vid && !!model?.pid && device.vendorId === model.vid && device.productId === model.pid;
+}
 
 // Sub-command IDs verified against github.com/echtzeit-solutions/monsgeek-akko-linux
 // (hardware-read-verified + gRPC server built for official-app interop — more
@@ -387,7 +452,7 @@ const MONO = "'JetBrains Mono',monospace";
 /* ─────────────────────────────────────────────────────────────────────────────
    useKeyboard HOOK
 ───────────────────────────────────────────────────────────────────────────── */
-function useKeyboard({ onSettings, onTelemetry }) {
+function useKeyboard({ onSettings, onTelemetry, model = DEFAULT_KEYBOARD_MODEL }) {
   const dev      = useRef(null);
   const liveDev  = useRef(null);
   const debounce = useRef({});
@@ -446,11 +511,12 @@ function useKeyboard({ onSettings, onTelemetry }) {
     setTelemetry("connecting");
     try {
       let devices = await navigator.hid.getDevices();
+      const allowedUsagePages = new Set(model.usagePages || USAGE_PAGES);
       const hasDepthInput = d =>
-        d.vendorId === VID && d.productId === PID &&
+        matchesModel(d, model) &&
         d.collections.some(c =>
           c.inputReports?.some(r => r.reportId === 0x05) ||
-          (c.usagePage === USAGE_PAGE && c.inputReports?.length > 0)
+          (allowedUsagePages.has(c.usagePage) && c.inputReports?.length > 0)
         );
       let live = devices.find(hasDepthInput);
 
@@ -458,7 +524,9 @@ function useKeyboard({ onSettings, onTelemetry }) {
       // request by VID/PID, then pick the collection that exposes input report 0x05.
       if (!live) {
         const matches = await navigator.hid.requestDevice({
-          filters: [{ vendorId: VID, productId: PID }]
+          filters: modelFilters(model, model.usageInput || 0x01).length
+            ? modelFilters(model, model.usageInput || 0x01)
+            : [{ vendorId: model.vid, productId: model.pid }]
         });
         live = matches.find(hasDepthInput) || matches.find(d => d.collections.some(c => c.inputReports?.length > 0)) || matches[0];
       }
@@ -481,7 +549,7 @@ function useKeyboard({ onSettings, onTelemetry }) {
       console.warn("telemetry open failed:", e);
       setTelemetry("error");
     }
-  }, [hidOK, onTelemetry]);
+  }, [hidOK, onTelemetry, model]);
 
   const connect = useCallback(async () => {
     if (!hidOK) return;
@@ -492,7 +560,7 @@ function useKeyboard({ onSettings, onTelemetry }) {
         // also exposes a usage 0x01 telemetry interface on the same
         // VID/PID/usagePage that has NO feature reports, so without this
         // requestDevice() can hand back the wrong one.
-        filters: [{ vendorId: VID, productId: PID, usagePage: USAGE_PAGE, usage: 0x02 }]
+        filters: modelFilters(model, model.usageConfig || 0x02)
       });
       if (!matches.length) { setStatus("idle"); return; }
       // Defensive: explicitly pick whichever match actually declares a
@@ -503,9 +571,10 @@ function useKeyboard({ onSettings, onTelemetry }) {
       await device.open();
       dev.current = device;
       const infor = parseInfor(await send(CMD.getInfor()));
-      if (!infor || infor.devId !== DEV_ID) {
+      const expectedDevId = model.expectedDevId;
+      if (!infor || (expectedDevId != null && infor.devId !== expectedDevId)) {
         await device.close(); dev.current = null;
-        throw new Error(`Wrong device (dev_id ${infor?.devId ?? "?"}, expected ${DEV_ID})`);
+        throw new Error(`Wrong device for ${model.displayName || model.name} (dev_id ${infor?.devId ?? "?"}${expectedDevId != null ? `, expected ${expectedDevId}` : ""})`);
       }
       setInfo(infor);
       device.addEventListener("disconnect", () => {
@@ -528,7 +597,7 @@ function useKeyboard({ onSettings, onTelemetry }) {
       // travel instead of demo keydown.
       openTelemetry().catch(console.error);
     } catch (e) { setStatus("error"); setErr(e.message); dev.current = null; }
-  }, [hidOK, send, readSettings, onSettings, openTelemetry]);
+  }, [hidOK, send, readSettings, onSettings, openTelemetry, model]);
 
   const disconnect = useCallback(async () => {
     try { if (dev.current) await send(CMD.setMagnetismReport(false)); } catch {}
@@ -1658,11 +1727,7 @@ const PNAMES = PROFILE_PRESETS.map(p => p.name);
 const PCOLORS = PROFILE_PRESETS.map(p => p.color);
 
 
-const DEVICE_OPTIONS = [
-  { id:"fun60", name:"FUN60 Ultra TMR", tag:"ANSI", demo:false, img:"⌨" },
-  { id:"demo60", name:"Demo FUN60 60HE", tag:"DEMO", demo:true, img:"▥" },
-  { id:"woot60", name:"Wooting 60HE v2", tag:"DEMO", demo:true, img:"▤" },
-];
+/* DEVICE_OPTIONS is defined near the protocol constants so WebHID can use the selected model. */
 
 function DeviceThumb({ device, active, compact=false }) {
   return (
@@ -1698,7 +1763,7 @@ function DevicePicker({ open, setOpen, activeDevice, setActiveDevice, setDemo })
       </button>
 
       {open && <div style={{
-        position:"absolute", left:0, right:-12, top:"calc(100% + 8px)", zIndex:20,
+        position:"absolute", left:0, right:0, top:"calc(100% + 8px)", zIndex:20,
         background:C.over, border:`1px solid ${C.bordHv}`, borderRadius:10,
         padding:8, display:"flex", flexDirection:"column", gap:7,
         boxShadow:"0 18px 50px rgba(0,0,0,.38)",
@@ -2056,8 +2121,8 @@ function SettingsSidebar({ settingsCat, setSettingsCat, activeDevice }) {
         }}>
           <DeviceThumb device={current} active={false}/>
           <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:10, color:C.muted }}>Demo devices</div>
-            <div style={{ fontSize:14, color:C.txt, fontWeight:900, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>Wooting 60HE...</div>
+            <div style={{ fontSize:10, color:C.muted }}>Selected keyboard</div>
+            <div style={{ fontSize:14, color:C.txt, fontWeight:900, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{current.displayName || current.name}</div>
           </div>
           <span style={{ color:C.muted }}>⌄</span>
         </button>
@@ -2074,7 +2139,7 @@ function SettingsSidebar({ settingsCat, setSettingsCat, activeDevice }) {
       <SettingsCategoryItem icon={IC.rgb} label="Interface" active={settingsCat==="interface"} onClick={()=>setSettingsCat("interface")}/>
 
       <div style={{ flex:1 }}/>
-      <div style={{ textAlign:"center", color:C.muted, fontSize:13, fontWeight:700, paddingBottom:4 }}>Fun60 Ultra tmr ultil v0.2.1</div>
+      <div style={{ textAlign:"center", color:C.muted, fontSize:13, fontWeight:700, paddingBottom:4 }}>FUN60 TMR Utility v0.2.1</div>
     </>
   );
 }
@@ -2083,7 +2148,7 @@ function SettingsCard({ children, style }) {
   return <div style={{ background:C.surf, border:`1px solid ${C.bord}`, borderRadius:8, padding:22, ...style }}>{children}</div>;
 }
 
-function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName, resolvedThemeName }) {
+function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName, resolvedThemeName, selectedModel }) {
   const appearance = themeName === "system" ? `Following system (${resolvedThemeName === "light" ? "Light" : "Dark"})` : (themeName === "light" ? "Light Theme" : "Dark Theme");
   return (
     <div style={{ width:"min(760px,100%)", margin:"0 auto", padding:"26px 0 80px", animation:"fadeSlideUp .18s ease-out" }}>
@@ -2135,7 +2200,18 @@ function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName, r
       {settingsCat === "general" && <>
         <h1 style={{ margin:"0 0 26px", fontSize:26, color:C.txt }}>General Settings</h1>
         <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-          <SettingsCard><div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Keyboard name</div><div style={{ color:C.muted, marginBottom:14 }}>This only changes the name inside this web driver.</div><input defaultValue="FUN60 Ultra TMR" style={{ width:"100%", height:46, borderRadius:7, border:`1px solid ${C.bord}`, background:C.over, color:C.txt, padding:"0 14px", fontFamily:FONT, fontWeight:800 }}/></SettingsCard>
+          <SettingsCard><div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Keyboard name</div><div style={{ color:C.muted, marginBottom:14 }}>This only changes the name inside this web driver.</div><input defaultValue={selectedModel.displayName || selectedModel.name} style={{ width:"100%", height:46, borderRadius:7, border:`1px solid ${C.bord}`, background:C.over, color:C.txt, padding:"0 14px", fontFamily:FONT, fontWeight:800 }}/></SettingsCard>
+          <SettingsCard>
+            <div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Compatibility mode</div>
+            <div style={{ color:C.muted, marginBottom:12, lineHeight:1.45 }}>
+              Active target: <b style={{ color:C.txt }}>{selectedModel.displayName || selectedModel.name}</b><br/>
+              VID/PID: <span style={{ fontFamily:MONO }}>{selectedModel.vid ? `0x${selectedModel.vid.toString(16)}` : "demo"}:{selectedModel.pid ? `0x${selectedModel.pid.toString(16)}` : "demo"}</span><br/>
+              Protocol family: <span style={{ fontFamily:MONO }}>{selectedModel.protocolFamily || "demo"}</span>
+            </div>
+            {selectedModel.compatibility && <div style={{ padding:10, borderRadius:7, background:C.activeBg, border:`1px solid ${C.bord}`, color:C.sub, fontSize:12, lineHeight:1.45 }}>
+              FUN60 Pro compatibility reuses the M1 V5/RY5088 commands but changes the WebHID VID/PID filter to 3151:502d and accepts vendor usage pages 0xFFFF/0xFF00.
+            </div>}
+          </SettingsCard>
           <SettingsCard><div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Factory reset</div><div style={{ color:C.muted, marginBottom:14 }}>Placeholder UI for now. Actual reset command is not wired.</div><button style={{ padding:"10px 14px", borderRadius:7, border:`1px solid ${C.red}`, background:"transparent", color:C.red, fontFamily:FONT, fontWeight:900 }}>Reset keyboard settings</button></SettingsCard>
         </div>
       </>}
@@ -2180,7 +2256,7 @@ export default function App() {
   const [selKeys, setSelKeys]   = useState(new Set());
   const [depths,  setDepths]    = useState({});
   const [demo,    setDemo]      = useState(false);
-  const [activeDevice, setActiveDevice] = useState("fun60");
+  const [activeDevice, setActiveDevice] = useState("fun60-ultra");
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [profileSwitching, setProfileSwitching] = useState(false);
 
@@ -2282,8 +2358,15 @@ export default function App() {
     });
   }, []);
 
-  const { hidOK, status, info, err, telemetry, telemetryFmt, connect, disconnect, send, dSend, openTelemetry, readSettings } = useKeyboard({ onSettings, onTelemetry });
+  const selectedModel = DEVICE_OPTIONS.find(d => d.id === activeDevice) || DEFAULT_KEYBOARD_MODEL;
+  const { hidOK, status, info, err, telemetry, telemetryFmt, connect, disconnect, send, dSend, openTelemetry, readSettings } = useKeyboard({ onSettings, onTelemetry, model: selectedModel });
   const connected = status === "connected";
+
+  useEffect(() => {
+    // Model selection changes the VID/PID filter. Disconnect first so the next
+    // connect prompt targets the selected keyboard instead of reusing stale HID handles.
+    if (connected) disconnect();
+  }, [activeDevice]);
 
   // Demo animation: simulated key travel driven by physical or pointer presses.
   const simFrameRef = useRef(null);
@@ -2480,7 +2563,7 @@ export default function App() {
       <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
       <ProfileEditModal profile={editingProfile == null ? null : profiles[editingProfile]} open={editingProfile != null} onClose={()=>setEditingProfile(null)} onSave={saveProfileEdit}/>
 
-      <div style={{ display:"grid", gridTemplateColumns:"64px 318px 1fr", height:"100%", minWidth:1100 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"64px 348px 1fr", height:"100%", minWidth:1100 }}>
         {/* Wootility-style icon rail */}
         <aside style={{
           background:C.nav, borderRight:`1px solid ${C.bord}`,
@@ -2513,7 +2596,7 @@ export default function App() {
         </aside>
 
         {/* left configuration column */}
-        <aside style={{ background:C.surf, borderRight:`1px solid ${C.bord}`, padding:20, display:"flex", flexDirection:"column", overflow:"visible" }}>
+        <aside style={{ background:C.surf, borderRight:`1px solid ${C.bord}`, padding:"22px 28px", display:"flex", flexDirection:"column", overflow:"visible" }}>
           {section === "settings" ? (
             <SettingsSidebar settingsCat={settingsCat} setSettingsCat={setSettingsCat} activeDevice={activeDevice}/>
           ) : section === "help" ? (
@@ -2569,14 +2652,14 @@ export default function App() {
             </div>
           </div>}
 
-          <div style={{ flex:1, overflow:"auto", padding: section==="settings" || section==="help" ? "0 56px 28px" : "0 34px 34px" }}>
+          <div style={{ flex:1, overflow:"auto", padding: section==="settings" || section==="help" ? "0 84px 28px" : "0 34px 34px" }}>
             <div style={{ width:"min(1240px,100%)", margin:"0 auto", display:"flex", flexDirection:"column", gap:18 }}>
               {!["settings","help"].includes(section) && <ConnectBanner hidOK={hidOK} status={status} info={info} err={err}
                 telemetry={telemetry} telemetryFmt={telemetryFmt}
                 onConnect={connect} onDisconnect={disconnect} onTelemetryConnect={openTelemetry}/>}
 
               {section==="settings" ? (
-                <SettingsPanel settingsCat={settingsCat} setSettingsCat={setSettingsCat} themeName={themeName} setThemeName={setThemeName} resolvedThemeName={resolvedThemeName}/>
+                <SettingsPanel settingsCat={settingsCat} setSettingsCat={setSettingsCat} themeName={themeName} setThemeName={setThemeName} resolvedThemeName={resolvedThemeName} selectedModel={selectedModel}/>
               ) : section==="help" ? (
                 <HelpPanel/>
               ) : section==="profiles" ? (
