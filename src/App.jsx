@@ -10,19 +10,41 @@ const RL  = 64; // report length
 
 // Compatibility targets. FUN60 Pro uses the same RY5088/M1 V5 protocol family,
 // but reports PID 0x502d and may expose vendor HID usage page 0xFFFF instead of
-// only 0xFF00, so device selection must be model-aware instead of hardcoding 0x5030.
+// only 0xFF00. Similarly, some FUN60 Ultra TMR / HE production batches report
+// PID 0x5029 instead of 0x5030, so device selection must be model-aware and
+// support multiple PIDs per profile.
 const KEYBOARD_MODELS = [
   {
     id: "fun60-ultra",
     name: "FUN60 Ultra TMR",
     displayName: "MonsGeek FUN60 Ultra TMR",
-    tag: "PID 0x5030 · RY5088",
+    tag: "PID 0x5030 / 0x5029 · RY5088",
     vid: BASE_VID,
     pid: 0x5030,
+    pids: [0x5030, 0x5029],
     usagePages: USAGE_PAGES,
     usageConfig: 0x02,
     usageInput: 0x01,
-    expectedDevId: DEFAULT_EXPECTED_DEV_ID,
+    expectedDevId: null, // do not block if GET_INFOR dev_id differs by firmware build
+    keyCount: 61,
+    hasMagnetism: true,
+    hasSidelight: false,
+    protocolFamily: "m1v5-ry5088",
+    img: "⌨",
+    demo: false,
+  },
+  {
+    id: "fun60-he",
+    name: "FUN60 HE / Ultra (5029)",
+    displayName: "MonsGeek FUN60 HE / Ultra",
+    tag: "PID 0x5029 · RY5088",
+    vid: BASE_VID,
+    pid: 0x5029,
+    pids: [0x5029],
+    usagePages: USAGE_PAGES,
+    usageConfig: 0x02,
+    usageInput: 0x01,
+    expectedDevId: null,
     keyCount: 61,
     hasMagnetism: true,
     hasSidelight: false,
@@ -37,6 +59,7 @@ const KEYBOARD_MODELS = [
     tag: "PID 0x502D · compat",
     vid: BASE_VID,
     pid: 0x502D,
+    pids: [0x502D, 0x502E, 0x502F],
     usagePages: USAGE_PAGES,
     usageConfig: 0x02,
     usageInput: 0x01,
@@ -61,15 +84,32 @@ const KEYBOARD_MODELS = [
 const DEVICE_OPTIONS = KEYBOARD_MODELS;
 const DEFAULT_KEYBOARD_MODEL = KEYBOARD_MODELS[0];
 
+function getModelPids(model) {
+  if (Array.isArray(model?.pids) && model.pids.length > 0) return model.pids;
+  if (model?.pid) return [model.pid];
+  return [];
+}
+
 function modelFilters(model, usage) {
-  if (!model?.vid || !model?.pid) return [];
+  if (!model?.vid) return [];
+  const pids = getModelPids(model);
+  if (!pids.length) return [];
   const pages = model.usagePages?.length ? model.usagePages : USAGE_PAGES;
-  return pages.map(usagePage => ({ vendorId: model.vid, productId: model.pid, usagePage, usage }));
+  const filters = [];
+  for (const pid of pids) {
+    for (const usagePage of pages) {
+      filters.push({ vendorId: model.vid, productId: pid, usagePage, usage });
+    }
+  }
+  return filters;
 }
 
 function matchesModel(device, model) {
-  return !!model?.vid && !!model?.pid && device.vendorId === model.vid && device.productId === model.pid;
+  if (!model?.vid || device.vendorId !== model.vid) return false;
+  const pids = getModelPids(model);
+  return pids.includes(device.productId);
 }
+
 
 // Sub-command IDs verified against github.com/echtzeit-solutions/monsgeek-akko-linux
 // (hardware-read-verified + gRPC server built for official-app interop — more
@@ -523,10 +563,11 @@ function useKeyboard({ onSettings, onTelemetry, model = DEFAULT_KEYBOARD_MODEL }
       // If permission for the live/input collection was not granted yet,
       // request by VID/PID, then pick the collection that exposes input report 0x05.
       if (!live) {
+        const filters = modelFilters(model, model.usageInput || 0x01);
         const matches = await navigator.hid.requestDevice({
-          filters: modelFilters(model, model.usageInput || 0x01).length
-            ? modelFilters(model, model.usageInput || 0x01)
-            : [{ vendorId: model.vid, productId: model.pid }]
+          filters: filters.length
+            ? filters
+            : getModelPids(model).map(pid => ({ vendorId: model.vid, productId: pid }))
         });
         live = matches.find(hasDepthInput) || matches.find(d => d.collections.some(c => c.inputReports?.length > 0)) || matches[0];
       }
@@ -571,10 +612,13 @@ function useKeyboard({ onSettings, onTelemetry, model = DEFAULT_KEYBOARD_MODEL }
       await device.open();
       dev.current = device;
       const infor = parseInfor(await send(CMD.getInfor()));
-      const expectedDevId = model.expectedDevId;
-      if (!infor || (expectedDevId != null && infor.devId !== expectedDevId)) {
+      if (!infor) {
         await device.close(); dev.current = null;
-        throw new Error(`Wrong device for ${model.displayName || model.name} (dev_id ${infor?.devId ?? "?"}${expectedDevId != null ? `, expected ${expectedDevId}` : ""})`);
+        throw new Error(`Failed to read device info for ${model.displayName || model.name}`);
+      }
+      const expectedDevId = model.expectedDevId;
+      if (expectedDevId != null && infor.devId !== expectedDevId) {
+        console.warn(`Unexpected dev_id ${infor.devId} for ${model.displayName || model.name} (expected ${expectedDevId})`);
       }
       setInfo(infor);
       device.addEventListener("disconnect", () => {
@@ -2205,7 +2249,7 @@ function SettingsPanel({ settingsCat, setSettingsCat, themeName, setThemeName, r
             <div style={{ fontSize:18, fontWeight:900, marginBottom:8 }}>Compatibility mode</div>
             <div style={{ color:C.muted, marginBottom:12, lineHeight:1.45 }}>
               Active target: <b style={{ color:C.txt }}>{selectedModel.displayName || selectedModel.name}</b><br/>
-              VID/PID: <span style={{ fontFamily:MONO }}>{selectedModel.vid ? `0x${selectedModel.vid.toString(16)}` : "demo"}:{selectedModel.pid ? `0x${selectedModel.pid.toString(16)}` : "demo"}</span><br/>
+              VID/PID: <span style={{ fontFamily:MONO }}>{selectedModel.vid ? `0x${selectedModel.vid.toString(16)}` : "demo"}:{getModelPids(selectedModel).map(p => `0x${p.toString(16)}`).join(" / ") || "demo"}</span><br/>
               Protocol family: <span style={{ fontFamily:MONO }}>{selectedModel.protocolFamily || "demo"}</span>
             </div>
             {selectedModel.compatibility && <div style={{ padding:10, borderRadius:7, background:C.activeBg, border:`1px solid ${C.bord}`, color:C.sub, fontSize:12, lineHeight:1.45 }}>

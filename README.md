@@ -55,13 +55,13 @@ Also thanks to https://github.com/echtzeit-solutions/monsgeek-akko-linux/ for ex
 
 | Field | Value |
 | --- | --- |
-| Keyboard | MonsGeek FUN60 Ultra TMR |
+| Keyboard | MonsGeek FUN60 Ultra TMR / FUN60 HE / FUN60 Pro |
 | Protocol family | RongYuan RY5088-style HID |
 | USB vendor ID | `0x3151` |
-| USB product ID | `0x5030` |
-| HID usage page | `0xFFFF` |
-| HID usage | `0x02` |
-| Device ID | `2307` |
+| USB product IDs | `0x5030` (FUN60 Ultra), `0x5029` (FUN60 HE / Ultra), `0x502D` (FUN60 Pro) |
+| HID usage pages | `0xFFFF`, `0xFF00` |
+| HID usage | `0x02` (Config / Feature reports), `0x01` (Input / Telemetry) |
+| Device ID | `2307` (or firmware variant) |
 
 Some right-side keys share firmware magnetic slot `63`, matching the behavior
 documented in the source comments.
